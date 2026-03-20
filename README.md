@@ -97,6 +97,11 @@ The FastAPI app now reads the workspace task files kept at `../inbox`, `../doing
 
 The `/mission-board` view now surfaces a "Create a task" form above the table. Submitting it POSTS to `/mission/create-task`, which assembles a markdown file in `inbox/` that follows the shared task template (status defaults to `Inbox`, the progress log logs the creation date, and common sections such as comments, blockers, and next steps are pre-filled). Only title, description, and priority are required—the form also accepts optional goal, acceptance criteria, files-to-modify, notes, and next-step hints while auto-generating a unique `YYYY-MM-DD-HHMMSS-short-title.md` filename. After a successful submission the UI shows a short success message and reloads the page so the new task immediately appears in the table.
 
+## App-only test compose
+- `docker-compose.test.yml` spins up only the FastAPI app (no database or n8n) so you can debug mission board logic without touching the main stack.
+- The test service uses `TASK_WORKSPACE=/workspace/shared/coding`, mounts the shared workspace read-only, binds the app code and notes, and exposes the app on port `18000` so it never conflicts with the running production port.
+- Run it with `docker compose -f docker-compose.test.yml -p rag-test up --build`, then hit <http://localhost:18000/mission-board> to verify the UI, create-task flow, and health endpoints. When you’re done, tear it down with `docker compose -f docker-compose.test.yml -p rag-test down` so the container names stay isolated.
+
 ## Directory overview
 ```
 app/                # FastAPI service (main.py) + requirements

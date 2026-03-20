@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  app:
+    image: python:3.12-slim
+    container_name: rag-app-test
+    working_dir: /app
+    env_file:
+      - .env
+    environment:
+      - TASK_WORKSPACE=/workspace/shared/coding
+    volumes:
+      - ./app:/app
+      - ./notes:/notes
+      - ./resources/test_data/:/workspace/shared/coding:ro
+    command: bash -lc "pip install -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "18000:8000"
