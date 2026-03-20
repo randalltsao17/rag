@@ -345,8 +345,7 @@ def mission_board():
   <p>Total tasks tracked: <strong>{total_tasks}</strong></p>
   <h2>Counts by bucket</h2>
   <ul>
-    {"
-    ".join(count_items)}
+    {"".join(count_items)}
   </ul>
   <section class="form-card">
     <h2>Create a task</h2>
@@ -397,8 +396,7 @@ def mission_board():
       <tr><th>State</th><th>Status</th><th>Priority</th><th>Title</th><th>Last Updated (UTC)</th><th>File</th><th>Goal</th></tr>
     </thead>
     <tbody>
-      {"
-      ".join(table_rows)}
+      {"".join(table_rows)}
     </tbody>
   </table>
   <script>
