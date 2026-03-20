@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+openai
+psycopg[binary]
+python-dotenv
+numpy
