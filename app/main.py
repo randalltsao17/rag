@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from openai import OpenAI
@@ -26,13 +26,8 @@ EMBED_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-4.1-mini"
 NOTES_DIR = Path("/notes")
 
-WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-TASK_DIRECTORIES = {
-    "inbox": WORKSPACE_ROOT / "inbox",
-    "doing": WORKSPACE_ROOT / "doing",
-    "done": WORKSPACE_ROOT / "done",
-    "failed": WORKSPACE_ROOT / "failed",
-}
+TASK_WORKSPACE = Path(os.getenv("TASK_WORKSPACE", "/workspace/shared/coding"))
+TASK_STATES = ["inbox", "doing", "done", "failed"]
 
 
 def _extract_section(content: str, heading: str) -> str:
@@ -61,6 +56,13 @@ def _clean_text_block(block: str) -> str:
     return "\n".join(cleaned_lines).strip()
 
 
+def _ensure_task_workspace() -> None:
+    if not TASK_WORKSPACE.exists() or not TASK_WORKSPACE.is_dir():
+        raise HTTPException(
+            status_code=500,
+            detail=f"TASK_WORKSPACE path not found: {TASK_WORKSPACE}"
+        )
+
 
 def _describe_task(task_path: Path, state: str) -> dict:
     content = task_path.read_text(encoding="utf-8")
@@ -72,7 +74,7 @@ def _describe_task(task_path: Path, state: str) -> dict:
     description = _clean_text_block(_extract_section(content, "Description"))
     updated = datetime.fromtimestamp(task_path.stat().st_mtime, timezone.utc).isoformat()
     try:
-        relative_path = task_path.relative_to(WORKSPACE_ROOT)
+        relative_path = task_path.relative_to(TASK_WORKSPACE)
     except ValueError:
         relative_path = task_path
     return {
@@ -90,8 +92,10 @@ def _describe_task(task_path: Path, state: str) -> dict:
 
 
 def _collect_tasks() -> List[dict]:
+    _ensure_task_workspace()
     tasks = []
-    for state, directory in TASK_DIRECTORIES.items():
+    for state in TASK_STATES:
+        directory = TASK_WORKSPACE / state
         if not directory.exists():
             continue
         for task_file in sorted(directory.glob("*.md")):
@@ -101,7 +105,7 @@ def _collect_tasks() -> List[dict]:
 
 
 def _counts_for_tasks(tasks: List[dict]) -> dict:
-    counts = {state: 0 for state in TASK_DIRECTORIES}
+    counts = {state: 0 for state in TASK_STATES}
     for task in tasks:
         state = task.get("state", "")
         if state in counts:
@@ -218,12 +222,12 @@ def mission_board():
         table_rows.append('<tr><td colspan="7">No tasks found.</td></tr>')
 
     count_items = []
-    for state in TASK_DIRECTORIES:
+    for state in TASK_STATES:
         count_items.append(
             f"<li>{html_lib.escape(state.capitalize())}: {counts.get(state, 0)}</li>"
         )
     for state, count in counts.items():
-        if state not in TASK_DIRECTORIES:
+        if state not in TASK_STATES:
             count_items.append(
                 f"<li>{html_lib.escape(state)}: {count}</li>"
             )

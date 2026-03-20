@@ -55,6 +55,7 @@ The stack optionally exposes:
    ```bash
    ./n8n_init.sh
    ```
+5. **Mission board path configuration** – the app reads the shared task files from the `TASK_WORKSPACE` environment variable (default `/workspace/shared/coding` in containers). When running inside Docker Compose the workspace is mounted into `/workspace/shared/coding` and the compose file exports `TASK_WORKSPACE`, so the mission board can read `inbox/`, `doing/`, `done/`, and `failed/`. For other setups, set `TASK_WORKSPACE` to the host path that holds the shared workspace.
 
 ## Running the stack
 ```bash
@@ -67,6 +68,8 @@ Services:
 - Adminer on <http://localhost:8080>
 
 > **Manual verification:** After `docker compose up -d`, run `docker compose ps`, then hit `GET http://localhost:8000/health` and `SELECT COUNT(*) FROM notes;` via Adminer or `psql` to confirm the API and database are reachable. Do not auto-start compose from scripts—you can copy/paste the command above manually.
+
+> **Mission board path:** Docker Compose mounts the shared workspace at `/workspace/shared/coding` and sets `TASK_WORKSPACE` so `/mission/status` and `/mission-board` can read the markdown task files. If you run the app outside of Compose, make sure `TASK_WORKSPACE` points to the folder that contains `inbox/`, `doing/`, `done/`, and `failed/`.
 
 ## Ingest workflow
 1. Drop Markdown files into the `notes/` directory (they are mounted into the container at `/notes`).
@@ -88,7 +91,7 @@ Services:
 - The endpoint returns the synthesized answer plus the list of matched chunks, their similarity scores, and source filenames.
 
 ## Mission board
-The FastAPI app now reads the workspace task files kept at `../inbox`, `../doing`, `../done`, and `../failed`, so the API can show live task status without starting other services.
+The FastAPI app now reads the workspace task files kept at `../inbox`, `../doing`, `../done`, and `../failed` via the `TASK_WORKSPACE` environment variable, so the API can show live task status without starting other services. Docker Compose mounts the shared workspace into `/workspace/shared/coding` and sets `TASK_WORKSPACE` to that path. If `TASK_WORKSPACE` is missing or points to a non-existent directory, the mission board endpoints return a clear 500 error explaining the expected path.
 - `GET /mission/status` returns counts, metadata, and last-updated timestamps for every markdown task file the project tracks.
 - `GET /mission-board` renders that same information as a plain HTML table (state, status, priority, file, goal, and updated time) for easy visibility.
 

@@ -22,9 +22,12 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - TASK_WORKSPACE=/workspace/shared/coding
     volumes:
       - ./app:/app
       - ./notes:/notes
+      - ../:/workspace/shared/coding:ro
     command: bash -lc "pip install -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
