@@ -1,9 +1,12 @@
 import os
 import hashlib
+import html as html_lib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from openai import OpenAI
 import psycopg
@@ -22,6 +25,93 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMBED_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-4.1-mini"
 NOTES_DIR = Path("/notes")
+
+WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
+TASK_DIRECTORIES = {
+    "inbox": WORKSPACE_ROOT / "inbox",
+    "doing": WORKSPACE_ROOT / "doing",
+    "done": WORKSPACE_ROOT / "done",
+    "failed": WORKSPACE_ROOT / "failed",
+}
+
+
+def _extract_section(content: str, heading: str) -> str:
+    marker = f"## {heading}"
+    lines = content.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() == marker:
+            section_lines = []
+            for next_line in lines[index + 1 :]:
+                if next_line.startswith("## "):
+                    break
+                section_lines.append(next_line)
+            return "\n".join(section_lines).strip()
+    return ""
+
+
+
+def _clean_text_block(block: str) -> str:
+    if not block:
+        return ""
+    cleaned_lines = []
+    for line in block.splitlines():
+        trimmed = line.rstrip()
+        if trimmed:
+            cleaned_lines.append(trimmed)
+    return "\n".join(cleaned_lines).strip()
+
+
+
+def _describe_task(task_path: Path, state: str) -> dict:
+    content = task_path.read_text(encoding="utf-8")
+    title = _extract_section(content, "Title") or task_path.stem
+    priority = _extract_section(content, "Priority") or "Unknown"
+    status_field = _extract_section(content, "Status")
+    status = status_field or state.capitalize()
+    goal = _clean_text_block(_extract_section(content, "Goal"))
+    description = _clean_text_block(_extract_section(content, "Description"))
+    updated = datetime.fromtimestamp(task_path.stat().st_mtime, timezone.utc).isoformat()
+    try:
+        relative_path = task_path.relative_to(WORKSPACE_ROOT)
+    except ValueError:
+        relative_path = task_path
+    return {
+        "filename": task_path.name,
+        "title": title,
+        "status": status,
+        "state": state,
+        "priority": priority,
+        "goal": goal,
+        "description": description,
+        "last_updated": updated,
+        "path": str(relative_path),
+    }
+
+
+
+def _collect_tasks() -> List[dict]:
+    tasks = []
+    for state, directory in TASK_DIRECTORIES.items():
+        if not directory.exists():
+            continue
+        for task_file in sorted(directory.glob("*.md")):
+            tasks.append(_describe_task(task_file, state))
+    return tasks
+
+
+
+def _counts_for_tasks(tasks: List[dict]) -> dict:
+    counts = {state: 0 for state in TASK_DIRECTORIES}
+    for task in tasks:
+        state = task.get("state", "")
+        if state in counts:
+            counts[state] += 1
+        else:
+            counts[state] = counts.get(state, 0) + 1
+    return counts
+
+
+
 
 
 class QueryRequest(BaseModel):
@@ -90,6 +180,86 @@ def health():
         "db_host": os.getenv("DB_HOST", "not-set"),
         "notes_dir": str(NOTES_DIR),
     }
+
+
+@app.get("/mission/status")
+def mission_status():
+    tasks = _collect_tasks()
+    counts = _counts_for_tasks(tasks)
+    return {
+        "status": "ok",
+        "total_tasks": sum(counts.values()),
+        "counts": counts,
+        "tasks": tasks,
+    }
+
+
+@app.get("/mission-board", response_class=HTMLResponse)
+def mission_board():
+    tasks = _collect_tasks()
+    counts = _counts_for_tasks(tasks)
+    total_tasks = sum(counts.values())
+    table_rows = []
+    for task in tasks:
+        goal_text = task.get("goal") or "—"
+        goal_html = html_lib.escape(goal_text).replace("\n", "<br />")
+        table_rows.append(
+            "<tr>"
+            f"<td>{html_lib.escape(task['state']).capitalize()}</td>"
+            f"<td>{html_lib.escape(task['status'])}</td>"
+            f"<td>{html_lib.escape(task['priority'])}</td>"
+            f"<td>{html_lib.escape(task['title'])}</td>"
+            f"<td>{html_lib.escape(task['last_updated'])}</td>"
+            f"<td><code>{html_lib.escape(task['path'])}</code></td>"
+            f"<td>{goal_html}</td>"
+            "</tr>"
+        )
+    if not table_rows:
+        table_rows.append('<tr><td colspan="7">No tasks found.</td></tr>')
+
+    count_items = []
+    for state in TASK_DIRECTORIES:
+        count_items.append(
+            f"<li>{html_lib.escape(state.capitalize())}: {counts.get(state, 0)}</li>"
+        )
+    for state, count in counts.items():
+        if state not in TASK_DIRECTORIES:
+            count_items.append(
+                f"<li>{html_lib.escape(state)}: {count}</li>"
+            )
+
+    html_content = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mission Board</title>
+  <style>
+    body {{font-family: system-ui, sans-serif; margin: 1.5rem;}}
+    table {{width: 100%; border-collapse: collapse;}}
+    th, td {{border: 1px solid #d0d0d0; padding: 0.4rem 0.6rem; text-align: left;}}
+    th {{background: #f3f3f3;}}
+    code {{background: #f9f9f9; padding: 0.1rem 0.3rem; border-radius: 3px;}}
+  </style>
+</head>
+<body>
+  <h1>Mission Board</h1>
+  <p>Total tasks tracked: <strong>{total_tasks}</strong></p>
+  <h2>Counts by bucket</h2>
+  <ul>
+    {"\n    ".join(count_items)}
+  </ul>
+  <table>
+    <thead>
+      <tr><th>State</th><th>Status</th><th>Priority</th><th>Title</th><th>Last Updated (UTC)</th><th>File</th><th>Goal</th></tr>
+    </thead>
+    <tbody>
+      {"\n      ".join(table_rows)}
+    </tbody>
+  </table>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html_content)
 
 
 @app.post("/ingest")

@@ -6,6 +6,7 @@ A lightweight Retrieval-Augmented Generation (RAG) playground for personal notes
 - **Markdown note ingestion** – `/ingest` hashes every Markdown file under the shared `/notes` volume and stores chunks plus OpenAI embeddings in Postgres.
 - **Semantic querying** – `/query` embeds ad-hoc questions, retrieves the most similar note chunks, and asks OpenAI to synthesize an answer that cites the source files.
 - **Containerized stack** – `docker-compose.yml` brings up pgvector, the FastAPI app, n8n, and Adminer for quick DB inspection.
+- **Mission board** – `/mission/status` summarizes the Markdown task files stored in `inbox/`, `doing/`, `done/`, and `failed/`, and `/mission-board` renders the same data as a simple HTML table for quick visibility without UI polish.
 - **Sample tooling** – scripts under `samples/` convert PDFs to Markdown (`pymupdf4llm`) and provide a CLI wrapper for querying the API.
 - **Automation hooks** – `n8n_init.sh` prepares the persistent volume so n8n workflows can orchestrate ingestion/alerts later on.
 
@@ -86,6 +87,11 @@ Services:
 - Sample CLI: `samples/ragcli/ask.sh "What is the deployment plan?" 5`
 - The endpoint returns the synthesized answer plus the list of matched chunks, their similarity scores, and source filenames.
 
+## Mission board
+The FastAPI app now reads the workspace task files kept at `../inbox`, `../doing`, `../done`, and `../failed`, so the API can show live task status without starting other services.
+- `GET /mission/status` returns counts, metadata, and last-updated timestamps for every markdown task file the project tracks.
+- `GET /mission-board` renders that same information as a plain HTML table (state, status, priority, file, goal, and updated time) for easy visibility.
+
 ## Directory overview
 ```
 app/                # FastAPI service (main.py) + requirements
@@ -112,6 +118,8 @@ restart_app.sh      # Convenience script to restart only the app container
 - `curl http://localhost:8000/health` → returns `{"status": "healthy"...}`
 - `curl -X POST http://localhost:8000/ingest` after placing at least one `.md` file into `notes/`
 - `curl -X POST http://localhost:8000/query -H "Content-Type: application/json" -d '{"question":"test"}'`
+- `curl http://localhost:8000/mission/status` (JSON task board summary)
+- Browse http://localhost:8000/mission-board to see the mission board table
 - Inspect `notes` and `note_chunks` tables via Adminer or `psql` to ensure rows exist
 
 ## Next ideas
