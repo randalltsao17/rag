@@ -1,11 +1,12 @@
 import os
 import hashlib
 import html as html_lib
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from openai import OpenAI
@@ -113,6 +114,88 @@ def _counts_for_tasks(tasks: List[dict]) -> dict:
         else:
             counts[state] = counts.get(state, 0) + 1
     return counts
+
+
+def _slugify_title(text: str) -> str:
+    normalized = text.strip().lower()
+    normalized = re.sub(r"[^a-z0-9]+", "-", normalized)
+    normalized = normalized.strip("-")
+    if not normalized:
+        return "task"
+    return normalized[:40]
+
+
+def _generate_task_filename(title_slug: str) -> str:
+    now = datetime.now(timezone.utc)
+    date_prefix = now.strftime("%Y-%m-%d")
+    time_suffix = now.strftime("%H%M%S")
+    base = f"{date_prefix}-{time_suffix}-{title_slug}"
+    inbox_dir = TASK_WORKSPACE / "inbox"
+    candidate = base
+    index = 1
+    while (inbox_dir / f"{candidate}.md").exists():
+        candidate = f"{base}-{index}"
+        index += 1
+    return f"{candidate}.md"
+
+
+def _task_template(
+    title: str,
+    description: str,
+    priority: str,
+    goal: str,
+    acceptance_criteria: str,
+    files_to_modify: str,
+    notes: str,
+    next_step: str,
+) -> str:
+    created_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    validation = (
+        "- Submit this form on the mission board at `/mission-board`.\n"
+        "- Confirm the new file appears under `inbox/` inside the shared workspace.\n"
+        "- Reload `/mission-board` to ensure the task shows up in the table.\n"
+    )
+
+    return f"""
+## Title
+{title}
+
+## Description
+{description}
+
+## Priority
+{priority}
+
+## Status
+Inbox
+
+## Goal
+{goal or "Review task and begin implementation"}
+
+## Acceptance Criteria
+{acceptance_criteria or "- None yet."}
+
+## Files to Modify
+{files_to_modify or "None yet."}
+
+## Notes
+{notes or "None."}
+
+## Validation
+{validation.strip()}
+
+## Progress Log
+- [{created_date}] Created via mission board form.
+
+## Changed Files
+None yet
+
+## Blockers
+None
+
+## Next Step
+{next_step or "Review task and begin implementation."}
+""".strip()
 
 
 
@@ -239,10 +322,22 @@ def mission_board():
   <title>Mission Board</title>
   <style>
     body {{font-family: system-ui, sans-serif; margin: 1.5rem;}}
-    table {{width: 100%; border-collapse: collapse;}}
+    table {{width: 100%; border-collapse: collapse; margin-top: 1rem;}}
     th, td {{border: 1px solid #d0d0d0; padding: 0.4rem 0.6rem; text-align: left;}}
     th {{background: #f3f3f3;}}
     code {{background: #f9f9f9; padding: 0.1rem 0.3rem; border-radius: 3px;}}
+    .form-card {{background: #fefefe; border: 1px solid #ececec; border-radius: 8px; padding: 1rem 1.25rem 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,0.05);}}
+    #create-task-form {{display: grid; gap: 0.75rem; max-width: 720px;}}
+    #create-task-form label {{display: flex; flex-direction: column; font-weight: 600; gap: 0.3rem;}}
+    #create-task-form input,
+    #create-task-form textarea,
+    #create-task-form select {{font-family: inherit; font-size: 1rem; padding: 0.45rem 0.55rem; border: 1px solid #c0c0c0; border-radius: 4px; background: #fff;}}
+    #create-task-form textarea {{resize: vertical; min-height: 60px;}}
+    #create-task-form button {{align-self: flex-start; padding: 0.55rem 1.1rem; border: none; border-radius: 4px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; transition: background 0.2s ease;}}
+    #create-task-form button:hover {{background: #1d4ed8;}}
+    #form-message {{margin-top: 0.45rem; font-weight: 600; min-height: 1.5rem;}}
+    #form-message.success {{color: #0b6;}}
+    #form-message.error {{color: #c00;}}
   </style>
 </head>
 <body>
@@ -250,16 +345,90 @@ def mission_board():
   <p>Total tasks tracked: <strong>{total_tasks}</strong></p>
   <h2>Counts by bucket</h2>
   <ul>
-    {"\n    ".join(count_items)}
+    {"
+    ".join(count_items)}
   </ul>
+  <section class="form-card">
+    <h2>Create a task</h2>
+    <p>Fill the minimal fields below to save a task directly into the inbox.</p>
+    <form id="create-task-form">
+      <label>
+        Title
+        <input name="title" required maxlength="120" placeholder="Short descriptive title" />
+      </label>
+      <label>
+        Description
+        <textarea name="description" required rows="3" placeholder="Describe what needs to happen."></textarea>
+      </label>
+      <label>
+        Priority
+        <select name="priority">
+          <option>High</option>
+          <option selected>Medium</option>
+          <option>Low</option>
+        </select>
+      </label>
+      <label>
+        Goal (optional)
+        <textarea name="goal" rows="2" placeholder="What outcome do we want?"></textarea>
+      </label>
+      <label>
+        Acceptance Criteria (optional)
+        <textarea name="acceptance_criteria" rows="2" placeholder="List the checks that mean done."></textarea>
+      </label>
+      <label>
+        Files to Modify (optional)
+        <textarea name="files_to_modify" rows="2" placeholder="Comma-separated paths."></textarea>
+      </label>
+      <label>
+        Notes (optional)
+        <textarea name="notes" rows="2" placeholder="Any extra context."></textarea>
+      </label>
+      <label>
+        Next Step (optional)
+        <input name="next_step" placeholder="What should happen immediately after creation?" />
+      </label>
+      <button type="submit">Create task</button>
+    </form>
+    <div id="form-message" aria-live="polite"></div>
+  </section>
   <table>
     <thead>
       <tr><th>State</th><th>Status</th><th>Priority</th><th>Title</th><th>Last Updated (UTC)</th><th>File</th><th>Goal</th></tr>
     </thead>
     <tbody>
-      {"\n      ".join(table_rows)}
+      {"
+      ".join(table_rows)}
     </tbody>
   </table>
+  <script>
+    const form = document.getElementById("create-task-form");
+    const message = document.getElementById("form-message");
+    form.addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      message.textContent = "Creating task…";
+      message.className = "";
+      try {{
+        const response = await fetch("/mission/create-task", {{
+          method: "POST",
+          body: new URLSearchParams(new FormData(form)),
+        }});
+        const payload = await response.json();
+        if (!response.ok) {{
+          throw new Error(payload.detail || payload.message || "Unable to create task.");
+        }}
+        message.textContent = `Created file ${{payload.filename || payload.path || "new task"}}. Reloading...`;
+        message.className = "message success";
+        form.reset();
+        setTimeout(() => {{
+          window.location.reload();
+        }}, 1200);
+      }} catch (error) {{
+        message.textContent = error.message || "Unable to create task.";
+        message.className = "message error";
+      }}
+    }});
+  </script>
 </body>
 </html>
 """
@@ -429,4 +598,56 @@ def query_notes(req: QueryRequest):
         "status": "ok",
         "matches": matches,
         "answer": answer,
+    }
+
+
+@app.post("/mission/create-task")
+def create_task(
+    title: str = Form(...),
+    description: str = Form(...),
+    priority: str = Form("Medium"),
+    goal: str = Form(""),
+    acceptance_criteria: str = Form(""),
+    files_to_modify: str = Form(""),
+    notes: str = Form(""),
+    next_step: str = Form("Review task and begin implementation."),
+) -> dict:
+    title_text = title.strip() or "Untitled task"
+    description_text = description.strip() or "Description forthcoming."
+    priority_text = priority.strip() or "Medium"
+    goal_text = goal.strip() or "Review task and begin implementation"
+    acceptance_text = acceptance_criteria.strip()
+    files_text = files_to_modify.strip()
+    notes_text = notes.strip()
+    next_step_text = next_step.strip() or "Review task and begin implementation."
+
+    _ensure_task_workspace()
+    inbox_dir = TASK_WORKSPACE / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+
+    slug = _slugify_title(title_text)
+    filename = _generate_task_filename(slug)
+    task_path = inbox_dir / filename
+
+    content = _task_template(
+        title=title_text,
+        description=description_text,
+        priority=priority_text,
+        goal=goal_text,
+        acceptance_criteria=acceptance_text,
+        files_to_modify=files_text,
+        notes=notes_text,
+        next_step=next_step_text,
+    )
+
+    task_path.write_text(content, encoding="utf-8")
+    try:
+        relative_path = task_path.relative_to(TASK_WORKSPACE)
+    except ValueError:
+        relative_path = task_path
+
+    return {
+        "status": "ok",
+        "filename": filename,
+        "path": str(relative_path),
     }

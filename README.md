@@ -95,6 +95,8 @@ The FastAPI app now reads the workspace task files kept at `../inbox`, `../doing
 - `GET /mission/status` returns counts, metadata, and last-updated timestamps for every markdown task file the project tracks.
 - `GET /mission-board` renders that same information as a plain HTML table (state, status, priority, file, goal, and updated time) for easy visibility.
 
+The `/mission-board` view now surfaces a "Create a task" form above the table. Submitting it POSTS to `/mission/create-task`, which assembles a markdown file in `inbox/` that follows the shared task template (status defaults to `Inbox`, the progress log logs the creation date, and common sections such as comments, blockers, and next steps are pre-filled). Only title, description, and priority are required—the form also accepts optional goal, acceptance criteria, files-to-modify, notes, and next-step hints while auto-generating a unique `YYYY-MM-DD-HHMMSS-short-title.md` filename. After a successful submission the UI shows a short success message and reloads the page so the new task immediately appears in the table.
+
 ## Directory overview
 ```
 app/                # FastAPI service (main.py) + requirements
@@ -123,6 +125,7 @@ restart_app.sh      # Convenience script to restart only the app container
 - `curl -X POST http://localhost:8000/query -H "Content-Type: application/json" -d '{"question":"test"}'`
 - `curl http://localhost:8000/mission/status` (JSON task board summary)
 - Browse http://localhost:8000/mission-board to see the mission board table
+- Use the mission board form at http://localhost:8000/mission-board to create a task, then check that a new file appears in `inbox/` and the table refreshes so the entry is visible.
 - Inspect `notes` and `note_chunks` tables via Adminer or `psql` to ensure rows exist
 
 ## Next ideas
