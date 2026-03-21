@@ -119,6 +119,21 @@ def _generate_task_filename(title_slug: str) -> str:
 
 
 
+DEFAULT_EXECUTION_REQUEST = (
+    "Do not stop early after a partial implementation if the next step can be continued safely in the same run. "
+    "Only stop early if the task is completed, blocked, runtime validation is not authorized or not available, "
+    "or a clear safe checkpoint has been reached and no further safe progress can be made. "
+    "Make small, safe, incremental changes. "
+    "Update the task file with progress, changed files, blockers, validation, and next step. "
+    "Write a daily log. "
+    "If the task is documentation-only and acceptance criteria are satisfied, move it to done. "
+    "Do not run docker compose lifecycle commands against the active environment. "
+    "If the current task explicitly authorizes isolated test validation, you may continue using the isolated test compose setup only. "
+    "Do not use the main compose file. "
+    "Commit and push the code when the task is done."
+)
+
+
 def _task_template(
     title: str,
     description: str,
@@ -136,7 +151,8 @@ def _task_template(
         "- Reload `/mission-board` to ensure the task shows up in the table.\n"
     )
 
-    return f"""
+    return f"""# Task: {title}
+
 ## Title
 {title}
 
@@ -153,13 +169,16 @@ Inbox
 {goal or "Review task and begin implementation"}
 
 ## Acceptance Criteria
-{acceptance_criteria or "- None yet."}
+{acceptance_criteria or "- [ ] The feature works as expected\n- [ ] Validation is recorded clearly\n- [ ] The task file and daily log are updated"}
 
 ## Files to Modify
-{files_to_modify or "None yet."}
+{files_to_modify or "- github/rag/app/main.py\n- related HTML/template files if needed"}
 
 ## Notes
 {notes or "None."}
+
+## Execution Request
+{DEFAULT_EXECUTION_REQUEST}
 
 ## Validation
 {validation.strip()}
@@ -174,7 +193,7 @@ None yet
 None
 
 ## Next Step
-{next_step or "Review task and begin implementation."}
+{next_step or "Inspect the current implementation and apply the smallest safe change first."}
 """.strip()
 
 
@@ -350,6 +369,15 @@ def mission_board():
                 f"<li>{html_lib.escape(state)}: {count}</li>"
             )
 
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    default_title_placeholder = f"{today}-NNN-short-descriptive-title"
+    default_description_placeholder = "Add a simple delete action for inbox markdown tasks in the mission board."
+    default_goal_placeholder = "Allow safe deletion of unprocessed inbox markdown tasks from the mission board UI."
+    default_acceptance_placeholder = "- [ ] The feature works as expected\n- [ ] Validation is recorded clearly\n- [ ] The task file and daily log are updated"
+    default_files_placeholder = "github/rag/app/main.py\ngithub/rag/docker-compose.test.yml\nrelated HTML/template files if needed"
+    default_notes_placeholder = "Any extra context, constraints, or background information."
+    default_next_step_placeholder = "Inspect the current implementation and apply the smallest safe change first."
+
     html_content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -361,7 +389,7 @@ def mission_board():
     th, td {{border: 1px solid #d0d0d0; padding: 0.4rem 0.6rem; text-align: left;}}
     th {{background: #f3f3f3;}}
     code {{background: #f9f9f9; padding: 0.1rem 0.3rem; border-radius: 3px;}}
-    .form-card {{background: #fefefe; border: 1px solid #ececec; border-radius: 8px; padding: 1rem 1.25rem 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,0.05);}}
+    .form-card {{background: #fefefe; border: 1px solid #ececec; border-radius: 8px; padding: 1rem 1.25rem 1.5rem; margin-top: 2rem; margin-bottom: 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,0.05);}}
     #create-task-form {{display: grid; gap: 0.75rem; max-width: 720px;}}
     #create-task-form label {{display: flex; flex-direction: column; font-weight: 600; gap: 0.3rem;}}
     #create-task-form input,
@@ -385,17 +413,26 @@ def mission_board():
   <ul>
     {"".join(count_items)}
   </ul>
+  <div id="delete-message" aria-live="polite"></div>
+  <table>
+    <thead>
+      <tr><th>State</th><th>Status</th><th>Priority</th><th>Title</th><th>Last Updated (UTC)</th><th>File</th><th>Goal</th><th>Actions</th></tr>
+    </thead>
+    <tbody>
+      {"".join(table_rows)}
+    </tbody>
+  </table>
   <section class="form-card">
     <h2>Create a task</h2>
-    <p>Fill the minimal fields below to save a task directly into the inbox.</p>
+    <p>Fill the fields below to save a new task directly into the inbox. Placeholder text shows example values — replace with your own.</p>
     <form id="create-task-form">
       <label>
         Title
-        <input name="title" required maxlength="120" placeholder="Short descriptive title" />
+        <input name="title" required maxlength="120" placeholder="{default_title_placeholder}" />
       </label>
       <label>
         Description
-        <textarea name="description" required rows="3" placeholder="Describe what needs to happen."></textarea>
+        <textarea name="description" required rows="3" placeholder="{default_description_placeholder}"></textarea>
       </label>
       <label>
         Priority
@@ -407,37 +444,28 @@ def mission_board():
       </label>
       <label>
         Goal (optional)
-        <textarea name="goal" rows="2" placeholder="What outcome do we want?"></textarea>
+        <textarea name="goal" rows="2" placeholder="{default_goal_placeholder}"></textarea>
       </label>
       <label>
         Acceptance Criteria (optional)
-        <textarea name="acceptance_criteria" rows="2" placeholder="List the checks that mean done."></textarea>
+        <textarea name="acceptance_criteria" rows="4" placeholder="{default_acceptance_placeholder}"></textarea>
       </label>
       <label>
         Files to Modify (optional)
-        <textarea name="files_to_modify" rows="2" placeholder="Comma-separated paths."></textarea>
+        <textarea name="files_to_modify" rows="3" placeholder="{default_files_placeholder}"></textarea>
       </label>
       <label>
         Notes (optional)
-        <textarea name="notes" rows="2" placeholder="Any extra context."></textarea>
+        <textarea name="notes" rows="2" placeholder="{default_notes_placeholder}"></textarea>
       </label>
       <label>
         Next Step (optional)
-        <input name="next_step" placeholder="What should happen immediately after creation?" />
+        <input name="next_step" placeholder="{default_next_step_placeholder}" />
       </label>
       <button type="submit">Create task</button>
     </form>
     <div id="form-message" aria-live="polite"></div>
   </section>
-  <div id="delete-message" aria-live="polite"></div>
-  <table>
-    <thead>
-      <tr><th>State</th><th>Status</th><th>Priority</th><th>Title</th><th>Last Updated (UTC)</th><th>File</th><th>Goal</th><th>Actions</th></tr>
-    </thead>
-    <tbody>
-      {"".join(table_rows)}
-    </tbody>
-  </table>
   <script>
     const form = document.getElementById("create-task-form");
     const message = document.getElementById("form-message");
