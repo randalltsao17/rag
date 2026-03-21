@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse
@@ -114,6 +115,38 @@ def _counts_for_tasks(tasks: List[dict]) -> dict:
         else:
             counts[state] = counts.get(state, 0) + 1
     return counts
+
+
+def _resolve_task_file(relative_path: str) -> Path:
+    normalized = (relative_path or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Task path is required.")
+
+    requested = Path(normalized)
+    if requested.is_absolute():
+        raise HTTPException(status_code=400, detail="Absolute paths are not allowed.")
+
+    if requested.suffix.lower() != ".md":
+        raise HTTPException(status_code=400, detail="Only Markdown (.md) task files can be displayed.")
+
+    if not requested.parts:
+        raise HTTPException(status_code=400, detail="Invalid task path.")
+
+    if requested.parts[0] not in TASK_STATES:
+        raise HTTPException(status_code=400, detail="Task path must begin with a valid state directory.")
+
+    workspace_root = TASK_WORKSPACE.resolve()
+    candidate = (TASK_WORKSPACE / requested).resolve(strict=False)
+    if not (candidate == workspace_root or workspace_root in candidate.parents):
+        raise HTTPException(status_code=400, detail="Task path must reside under the shared workspace.")
+
+    if not candidate.exists():
+        raise HTTPException(status_code=404, detail="Task file not found.")
+
+    if not candidate.is_file():
+        raise HTTPException(status_code=400, detail="Task path must point to a file.")
+
+    return candidate
 
 
 def _slugify_title(text: str) -> str:
@@ -290,6 +323,7 @@ def mission_board():
     for task in tasks:
         goal_text = task.get("goal") or "—"
         goal_html = html_lib.escape(goal_text).replace("\n", "<br />")
+        view_link = f"/mission/task?path={quote(task['path'])}"
         table_rows.append(
             "<tr>"
             f"<td>{html_lib.escape(task['state']).capitalize()}</td>"
@@ -299,10 +333,11 @@ def mission_board():
             f"<td>{html_lib.escape(task['last_updated'])}</td>"
             f"<td><code>{html_lib.escape(task['path'])}</code></td>"
             f"<td>{goal_html}</td>"
+            f"<td><a href=\"{html_lib.escape(view_link)}\">View</a></td>"
             "</tr>"
         )
     if not table_rows:
-        table_rows.append('<tr><td colspan="7">No tasks found.</td></tr>')
+        table_rows.append('<tr><td colspan="8">No tasks found.</td></tr>')
 
     count_items = []
     for state in TASK_STATES:
@@ -393,7 +428,7 @@ def mission_board():
   </section>
   <table>
     <thead>
-      <tr><th>State</th><th>Status</th><th>Priority</th><th>Title</th><th>Last Updated (UTC)</th><th>File</th><th>Goal</th></tr>
+      <tr><th>State</th><th>Status</th><th>Priority</th><th>Title</th><th>Last Updated (UTC)</th><th>File</th><th>Goal</th><th>Actions</th></tr>
     </thead>
     <tbody>
       {"".join(table_rows)}
@@ -427,6 +462,39 @@ def mission_board():
       }}
     }});
   </script>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html_content)
+
+
+@app.get("/mission/task", response_class=HTMLResponse)
+def mission_task(path: str):
+    _ensure_task_workspace()
+    task_file = _resolve_task_file(path)
+    content = task_file.read_text(encoding="utf-8")
+    escaped_content = html_lib.escape(content)
+    try:
+        relative_path = task_file.relative_to(TASK_WORKSPACE)
+    except ValueError:
+        relative_path = task_file
+
+    html_content = f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\">
+  <title>Task detail: {html_lib.escape(str(relative_path))}</title>
+  <style>
+    body {{font-family: system-ui, sans-serif; margin: 1.5rem;}}
+    pre {{background: #111827; color: #f8fafc; padding: 1rem; border-radius: 6px; max-width: 900px; white-space: pre-wrap; font-family: Menlo, Consolas, monospace;}}
+    a {{display: inline-block; margin-bottom: 1rem;}}
+  </style>
+</head>
+<body>
+  <a href=\"/mission-board\">← Back to mission board</a>
+  <h1>Task preview</h1>
+  <p><strong>File:</strong> <code>{html_lib.escape(str(relative_path))}</code></p>
+  <pre>{escaped_content}</pre>
 </body>
 </html>
 """
