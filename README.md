@@ -6,7 +6,7 @@ A lightweight Retrieval-Augmented Generation (RAG) playground for personal notes
 - **Markdown note ingestion** – `/ingest` hashes every Markdown file under the shared `/notes` volume and stores chunks plus OpenAI embeddings in Postgres.
 - **Semantic querying** – `/query` embeds ad-hoc questions, retrieves the most similar note chunks, and asks OpenAI to synthesize an answer that cites the source files.
 - **Containerized stack** – `docker-compose.yml` brings up pgvector, the FastAPI app, n8n, and Adminer for quick DB inspection.
-- **Mission board** – `/mission/status` summarizes the Markdown task files stored in `inbox/`, `doing/`, `done/`, and `failed/`, and `/mission-board` renders the same data as a simple HTML table for quick visibility without UI polish.
+- **Mission board** – `/mission/status` summarizes the Markdown task files stored in `backlog/`, `inbox/`, `doing/`, `done/`, and `failed/`, and `/mission-board` renders the same data as a simple HTML table for quick visibility without UI polish. New tasks are created in `backlog/` and can be promoted to `inbox/` when ready for execution.
 - **Sample tooling** – scripts under `samples/` convert PDFs to Markdown (`pymupdf4llm`) and provide a CLI wrapper for querying the API.
 - **Automation hooks** – `n8n_init.sh` prepares the persistent volume so n8n workflows can orchestrate ingestion/alerts later on.
 
@@ -55,7 +55,7 @@ The stack optionally exposes:
    ```bash
    ./n8n_init.sh
    ```
-5. **Mission board path configuration** – the app reads the shared task files from the `TASK_WORKSPACE` environment variable (default `/workspace/shared/coding` in containers). When running inside Docker Compose the workspace is mounted into `/workspace/shared/coding` and the compose file exports `TASK_WORKSPACE`, so the mission board can read `inbox/`, `doing/`, `done/`, and `failed/`. For other setups, set `TASK_WORKSPACE` to the host path that holds the shared workspace.
+5. **Mission board path configuration** – the app reads the shared task files from the `TASK_WORKSPACE` environment variable (default `/workspace/shared/coding` in containers). When running inside Docker Compose the workspace is mounted into `/workspace/shared/coding` and the compose file exports `TASK_WORKSPACE`, so the mission board can read `backlog/`, `inbox/`, `doing/`, `done/`, and `failed/`. For other setups, set `TASK_WORKSPACE` to the host path that holds the shared workspace.
 
 ## Running the stack
 ```bash
@@ -91,14 +91,29 @@ Services:
 - The endpoint returns the synthesized answer plus the list of matched chunks, their similarity scores, and source filenames.
 
 ## Mission board
-The FastAPI app now reads the workspace task files kept at `../inbox`, `../doing`, `../done`, and `../failed` via the `TASK_WORKSPACE` environment variable, so the API can show live task status without starting other services. Docker Compose mounts the shared workspace into `/workspace/shared/coding` and sets `TASK_WORKSPACE` to that path. If `TASK_WORKSPACE` is missing or points to a non-existent directory, the mission board endpoints return a clear 500 error explaining the expected path.
+The FastAPI app reads workspace task files from the `TASK_WORKSPACE` environment variable (default `/workspace/shared/coding` in containers). Docker Compose mounts the shared workspace into `/workspace/shared/coding` and sets `TASK_WORKSPACE` to that path. If `TASK_WORKSPACE` is missing or points to a non-existent directory, the mission board endpoints return a clear 500 error explaining the expected path.
 - `GET /mission/status` returns counts, metadata, and last-updated timestamps for every markdown task file the project tracks.
 - `GET /mission-board` renders that same information as a plain HTML table (state, status, priority, file, goal, and updated time) for easy visibility.
-- `GET /mission/task` accepts a relative path to one of the state folders (`inbox/`, `doing/`, `done/`, `failed/`), validates that it points to an existing `.md` file under the shared workspace, and renders the raw markdown content in a simple detail page so task owners can read the file without leaving the UI.
+- `GET /mission/task` accepts a relative path to one of the state folders (`backlog/`, `inbox/`, `doing/`, `done/`, `failed/`), validates that it points to an existing `.md` file under the shared workspace, and renders the raw markdown content in a simple detail page so task owners can read the file without leaving the UI.
 
-The `/mission-board` view now surfaces a "Create a task" form above the table. Submitting it POSTS to `/mission/create-task`, which assembles a markdown file in `inbox/` that follows the shared task template (status defaults to `Inbox`, the progress log logs the creation date, and common sections such as comments, blockers, and next steps are pre-filled). Only title, description, and priority are required—the form also accepts optional goal, acceptance criteria, files-to-modify, notes, and next-step hints while auto-generating a unique `YYYY-MM-DD-HHMMSS-short-title.md` filename. After a successful submission the UI shows a short success message and reloads the page so the new task immediately appears in the table.
+### Backlog workflow
+New tasks are created in `backlog/` and progress through the following lifecycle:
 
-The mission board table now includes a "View" action that navigates to `/mission/task?path=<state>/<filename>`, making it easy to read a task's markdown body without navigating the workspace directly.
+```
+backlog/ → inbox/ → doing/ → done/
+                          ↘ failed/
+```
+
+- **Backlog → Inbox:** use the "Move to inbox" button on any backlog task. The task is ready for the next agent execution run.
+- **Inbox → Backlog:** use the "Move to backlog" button to defer a task that is not yet ready.
+- **Delete:** only tasks in `backlog/` may be deleted from the UI.
+
+The `/mission-board` view surfaces a "Create a task" form that saves a new markdown file into `backlog/`. Only title, description, and priority are required — the form also accepts optional goal, acceptance criteria, files-to-modify, notes, and next-step hints. The filename is auto-generated as `YYYY-MM-DD-HHMMSS-short-title.md`. After submission the UI shows a short success message and reloads the page.
+
+The mission board table includes a "View" action that navigates to `/mission/task?path=<state>/<filename>`, making it easy to read a task's markdown body without navigating the workspace directly.
+
+### Move endpoint
+`POST /mission/move-task` accepts a `path` form field (e.g. `backlog/my-task.md`) and moves the file to the target bucket (`backlog` ↔ `inbox`). Returns `409` if a file with the same name already exists in the target.
 ## App-only test compose
 - `docker-compose.test.yml` spins up only the FastAPI app (no database or n8n) so you can debug mission board logic without touching the main stack.
 - The test service uses `TASK_WORKSPACE=/workspace/shared/coding`, mounts the shared workspace read-only, binds the app code and notes, and exposes the app on port `18000` so it never conflicts with the running production port.
@@ -132,7 +147,10 @@ restart_app.sh      # Convenience script to restart only the app container
 - `curl -X POST http://localhost:8000/query -H "Content-Type: application/json" -d '{"question":"test"}'`
 - `curl http://localhost:8000/mission/status` (JSON task board summary)
 - Browse http://localhost:8000/mission-board to see the mission board table
-- Use the mission board form at http://localhost:8000/mission-board to create a task, then check that a new file appears in `inbox/` and the table refreshes so the entry is visible.
+- Use the mission board form at http://localhost:8000/mission-board to create a task, then check that a new file appears in `backlog/` and the table refreshes so the entry is visible.
+- On the mission board, use "Move to inbox" on a backlog task and confirm the row moves to the Inbox section.
+- Use "Move to backlog" on an inbox task to defer it back.
+- Use "Delete" on a backlog task and confirm the file is removed; verify that inbox tasks do not show a delete button.
 - Inspect `notes` and `note_chunks` tables via Adminer or `psql` to ensure rows exist
 
 ## Next ideas

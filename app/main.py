@@ -29,7 +29,11 @@ CHAT_MODEL = "gpt-4.1-mini"
 NOTES_DIR = Path("/notes")
 
 TASK_WORKSPACE = Path(os.getenv("TASK_WORKSPACE", "/workspace/shared/coding"))
-TASK_STATES = ["inbox", "doing", "done", "failed"]
+TASK_STATES = ["backlog", "inbox", "doing", "done", "failed"]
+MOVE_ALLOWED = {
+    "backlog": "inbox",
+    "inbox": "backlog",
+}
 
 
 def _extract_section(content: str, heading: str) -> str:
@@ -109,10 +113,10 @@ def _generate_task_filename(title_slug: str) -> str:
     date_prefix = now.strftime("%Y-%m-%d")
     time_suffix = now.strftime("%H%M%S")
     base = f"{date_prefix}-{time_suffix}-{title_slug}"
-    inbox_dir = TASK_WORKSPACE / "inbox"
+    backlog_dir = TASK_WORKSPACE / "backlog"
     candidate = base
     index = 1
-    while (inbox_dir / f"{candidate}.md").exists():
+    while (backlog_dir / f"{candidate}.md").exists():
         candidate = f"{base}-{index}"
         index += 1
     return f"{candidate}.md"
@@ -147,8 +151,9 @@ def _task_template(
     created_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     validation = (
         "- Submit this form on the mission board at `/mission-board`.\n"
-        "- Confirm the new file appears under `inbox/` inside the shared workspace.\n"
-        "- Reload `/mission-board` to ensure the task shows up in the table.\n"
+        "- Confirm the new file appears under `backlog/` inside the shared workspace.\n"
+        "- Reload `/mission-board` to ensure the task shows up in the Backlog section.\n"
+        "- Use the 'Move to inbox' action to promote the task when ready.\n"
     )
 
     return f"""# Task: {title}
@@ -163,7 +168,7 @@ def _task_template(
 {priority}
 
 ## Status
-Inbox
+Backlog
 
 ## Goal
 {goal or "Review task and begin implementation"}
@@ -298,6 +303,27 @@ def _resolve_task_file(relative_path: str) -> Path:
     return candidate
 
 
+def _resolve_task_file_no_exist_check(relative_path: str) -> Path:
+    """Like _resolve_task_file but skips the exists check (for destination path validation)."""
+    normalized = (relative_path or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Task path is required.")
+    requested = Path(normalized)
+    if requested.is_absolute():
+        raise HTTPException(status_code=400, detail="Absolute paths are not allowed.")
+    if requested.suffix.lower() != ".md":
+        raise HTTPException(status_code=400, detail="Only Markdown (.md) task files can be resolved.")
+    if not requested.parts:
+        raise HTTPException(status_code=400, detail="Invalid task path.")
+    if requested.parts[0] not in TASK_STATES:
+        raise HTTPException(status_code=400, detail="Task path must begin with a valid state directory.")
+    workspace_root = TASK_WORKSPACE.resolve()
+    candidate = (TASK_WORKSPACE / requested).resolve(strict=False)
+    if not (candidate == workspace_root or workspace_root in candidate.parents):
+        raise HTTPException(status_code=400, detail="Task path must reside under the shared workspace.")
+    return candidate
+
+
 @app.get("/")
 def root():
     return {"status": "ok"}
@@ -334,13 +360,21 @@ def mission_board():
         goal_text = task.get("goal") or "—"
         goal_html = html_lib.escape(goal_text).replace("\n", "<br />")
         view_link = f"/mission/task?path={quote(task['path'])}"
+        state_val = task.get("state", "")
+        escaped_path = html_lib.escape(task["path"])
         actions = [
             f"<a href=\"{html_lib.escape(view_link)}\">View</a>"
         ]
-        if task.get("state") == "inbox":
-            escaped_path = html_lib.escape(task["path"])
+        if state_val == "backlog":
+            actions.append(
+                f"<button type=\"button\" class=\"move-task-button\" data-path=\"{escaped_path}\" data-label=\"Move to inbox\">Move to inbox</button>"
+            )
             actions.append(
                 f"<button type=\"button\" class=\"delete-task-button\" data-path=\"{escaped_path}\">Delete</button>"
+            )
+        elif state_val == "inbox":
+            actions.append(
+                f"<button type=\"button\" class=\"move-task-button\" data-path=\"{escaped_path}\" data-label=\"Move to backlog\">Move to backlog</button>"
             )
         actions_html = " ".join(actions)
         table_rows.append(
@@ -424,7 +458,7 @@ def mission_board():
   </table>
   <section class="form-card">
     <h2>Create a task</h2>
-    <p>Fill the fields below to save a new task directly into the inbox. Placeholder text shows example values — replace with your own.</p>
+    <p>Fill the fields below to save a new task into the <strong>backlog</strong>. Move it to inbox when it is ready for execution. Placeholder text shows example values — replace with your own.</p>
     <form id="create-task-form">
       <label>
         Title
@@ -504,7 +538,7 @@ def mission_board():
         if (!targetPath) {{
           return;
         }}
-        if (!window.confirm("Delete inbox task " + targetPath + "?")) {{
+        if (!window.confirm("Delete backlog task " + targetPath + "?")) {{
           return;
         }}
         setDeleteMessage("Deleting " + targetPath + "…", "");
@@ -526,6 +560,32 @@ def mission_board():
         }}
       }});
     }});
+    document.querySelectorAll(".move-task-button").forEach((button) => {{
+      button.addEventListener("click", async () => {{
+        const targetPath = button.dataset.path;
+        const label = button.dataset.label || "Move";
+        if (!targetPath) {{
+          return;
+        }}
+        setDeleteMessage(label + ": " + targetPath + "…", "");
+        try {{
+          const response = await fetch("/mission/move-task", {{
+            method: "POST",
+            body: new URLSearchParams({{ path: targetPath }}),
+          }});
+          const payload = await response.json();
+          if (!response.ok) {{
+            throw new Error(payload.detail || payload.message || "Unable to move task.");
+          }}
+          setDeleteMessage(payload.message || label + " succeeded.", "success");
+          setTimeout(() => {{
+            window.location.reload();
+          }}, 1200);
+        }} catch (error) {{
+          setDeleteMessage(error.message || "Unable to move task.", "error");
+        }}
+      }});
+    }});
   </script>
 </body>
 </html>
@@ -541,8 +601,8 @@ def delete_task(path: str = Form(...)):
         relative_path = task_file.relative_to(TASK_WORKSPACE)
     except ValueError:
         raise HTTPException(status_code=500, detail="Task path resolution failed.")
-    if not relative_path.parts or relative_path.parts[0] != "inbox":
-        raise HTTPException(status_code=400, detail="Delete action is only allowed for tasks in inbox.")
+    if not relative_path.parts or relative_path.parts[0] != "backlog":
+        raise HTTPException(status_code=400, detail="Delete action is only allowed for tasks in backlog.")
     try:
         task_file.unlink()
     except OSError as exc:
@@ -550,6 +610,43 @@ def delete_task(path: str = Form(...)):
     return {
         "status": "ok",
         "message": f"Deleted {relative_path}."
+    }
+
+
+@app.post("/mission/move-task")
+def move_task(path: str = Form(...)):
+    _ensure_task_workspace()
+    task_file = _resolve_task_file(path)
+    try:
+        relative_path = task_file.relative_to(TASK_WORKSPACE)
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Task path resolution failed.")
+    if not relative_path.parts:
+        raise HTTPException(status_code=400, detail="Invalid task path.")
+    source_bucket = relative_path.parts[0]
+    target_bucket = MOVE_ALLOWED.get(source_bucket)
+    if not target_bucket:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Move is not allowed from '{source_bucket}'. Only backlog↔inbox moves are supported."
+        )
+    target_dir = TASK_WORKSPACE / target_bucket
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_file = target_dir / task_file.name
+    if target_file.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"A task with this filename already exists in {target_bucket}/."
+        )
+    try:
+        task_file.rename(target_file)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to move task: {exc}")
+    new_relative = target_file.relative_to(TASK_WORKSPACE)
+    return {
+        "status": "ok",
+        "message": f"Moved {relative_path} → {new_relative}.",
+        "path": str(new_relative),
     }
 
 
@@ -773,12 +870,12 @@ def create_task(
     next_step_text = next_step.strip() or "Review task and begin implementation."
 
     _ensure_task_workspace()
-    inbox_dir = TASK_WORKSPACE / "inbox"
-    inbox_dir.mkdir(parents=True, exist_ok=True)
+    backlog_dir = TASK_WORKSPACE / "backlog"
+    backlog_dir.mkdir(parents=True, exist_ok=True)
 
     slug = _slugify_title(title_text)
     filename = _generate_task_filename(slug)
-    task_path = inbox_dir / filename
+    task_path = backlog_dir / filename
 
     content = _task_template(
         title=title_text,
