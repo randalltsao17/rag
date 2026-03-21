@@ -58,12 +58,23 @@ def _clean_text_block(block: str) -> str:
     return "\n".join(cleaned_lines).strip()
 
 
+
 def _ensure_task_workspace() -> None:
     if not TASK_WORKSPACE.exists() or not TASK_WORKSPACE.is_dir():
         raise HTTPException(
             status_code=500,
             detail=f"TASK_WORKSPACE path not found: {TASK_WORKSPACE}"
         )
+
+
+def _slugify_title(text: str) -> str:
+    normalized = text.strip().lower()
+    normalized = re.sub(r"[^a-z0-9]+", "-", normalized)
+    normalized = normalized.strip("-")
+    if not normalized:
+        return "task"
+    return normalized[:40]
+
 
 
 def _describe_task(task_path: Path, state: str) -> dict:
@@ -93,71 +104,6 @@ def _describe_task(task_path: Path, state: str) -> dict:
 
 
 
-def _collect_tasks() -> List[dict]:
-    _ensure_task_workspace()
-    tasks = []
-    for state in TASK_STATES:
-        directory = TASK_WORKSPACE / state
-        if not directory.exists():
-            continue
-        for task_file in sorted(directory.glob("*.md")):
-            tasks.append(_describe_task(task_file, state))
-    return tasks
-
-
-
-def _counts_for_tasks(tasks: List[dict]) -> dict:
-    counts = {state: 0 for state in TASK_STATES}
-    for task in tasks:
-        state = task.get("state", "")
-        if state in counts:
-            counts[state] += 1
-        else:
-            counts[state] = counts.get(state, 0) + 1
-    return counts
-
-
-def _resolve_task_file(relative_path: str) -> Path:
-    normalized = (relative_path or "").strip()
-    if not normalized:
-        raise HTTPException(status_code=400, detail="Task path is required.")
-
-    requested = Path(normalized)
-    if requested.is_absolute():
-        raise HTTPException(status_code=400, detail="Absolute paths are not allowed.")
-
-    if requested.suffix.lower() != ".md":
-        raise HTTPException(status_code=400, detail="Only Markdown (.md) task files can be displayed.")
-
-    if not requested.parts:
-        raise HTTPException(status_code=400, detail="Invalid task path.")
-
-    if requested.parts[0] not in TASK_STATES:
-        raise HTTPException(status_code=400, detail="Task path must begin with a valid state directory.")
-
-    workspace_root = TASK_WORKSPACE.resolve()
-    candidate = (TASK_WORKSPACE / requested).resolve(strict=False)
-    if not (candidate == workspace_root or workspace_root in candidate.parents):
-        raise HTTPException(status_code=400, detail="Task path must reside under the shared workspace.")
-
-    if not candidate.exists():
-        raise HTTPException(status_code=404, detail="Task file not found.")
-
-    if not candidate.is_file():
-        raise HTTPException(status_code=400, detail="Task path must point to a file.")
-
-    return candidate
-
-
-def _slugify_title(text: str) -> str:
-    normalized = text.strip().lower()
-    normalized = re.sub(r"[^a-z0-9]+", "-", normalized)
-    normalized = normalized.strip("-")
-    if not normalized:
-        return "task"
-    return normalized[:40]
-
-
 def _generate_task_filename(title_slug: str) -> str:
     now = datetime.now(timezone.utc)
     date_prefix = now.strftime("%Y-%m-%d")
@@ -170,6 +116,7 @@ def _generate_task_filename(title_slug: str) -> str:
         candidate = f"{base}-{index}"
         index += 1
     return f"{candidate}.md"
+
 
 
 def _task_template(
@@ -231,9 +178,6 @@ None
 """.strip()
 
 
-
-
-
 class QueryRequest(BaseModel):
     question: str
     top_k: int = 3
@@ -288,6 +232,53 @@ def embed_query(text: str) -> List[float]:
     return response.data[0].embedding
 
 
+def _collect_tasks() -> List[dict]:
+    _ensure_task_workspace()
+    tasks = []
+    for state in TASK_STATES:
+        directory = TASK_WORKSPACE / state
+        if not directory.exists():
+            continue
+        for task_file in sorted(directory.glob("*.md")):
+            tasks.append(_describe_task(task_file, state))
+    return tasks
+
+
+def _counts_for_tasks(tasks: List[dict]) -> dict:
+    counts = {state: 0 for state in TASK_STATES}
+    for task in tasks:
+        state = task.get("state", "")
+        if state in counts:
+            counts[state] += 1
+        else:
+            counts[state] = counts.get(state, 0) + 1
+    return counts
+
+
+def _resolve_task_file(relative_path: str) -> Path:
+    normalized = (relative_path or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Task path is required.")
+    requested = Path(normalized)
+    if requested.is_absolute():
+        raise HTTPException(status_code=400, detail="Absolute paths are not allowed.")
+    if requested.suffix.lower() != ".md":
+        raise HTTPException(status_code=400, detail="Only Markdown (.md) task files can be displayed.")
+    if not requested.parts:
+        raise HTTPException(status_code=400, detail="Invalid task path.")
+    if requested.parts[0] not in TASK_STATES:
+        raise HTTPException(status_code=400, detail="Task path must begin with a valid state directory.")
+    workspace_root = TASK_WORKSPACE.resolve()
+    candidate = (TASK_WORKSPACE / requested).resolve(strict=False)
+    if not (candidate == workspace_root or workspace_root in candidate.parents):
+        raise HTTPException(status_code=400, detail="Task path must reside under the shared workspace.")
+    if not candidate.exists():
+        raise HTTPException(status_code=404, detail="Task file not found.")
+    if not candidate.is_file():
+        raise HTTPException(status_code=400, detail="Task path must point to a file.")
+    return candidate
+
+
 @app.get("/")
 def root():
     return {"status": "ok"}
@@ -324,6 +315,15 @@ def mission_board():
         goal_text = task.get("goal") or "—"
         goal_html = html_lib.escape(goal_text).replace("\n", "<br />")
         view_link = f"/mission/task?path={quote(task['path'])}"
+        actions = [
+            f"<a href=\"{html_lib.escape(view_link)}\">View</a>"
+        ]
+        if task.get("state") == "inbox":
+            escaped_path = html_lib.escape(task["path"])
+            actions.append(
+                f"<button type=\"button\" class=\"delete-task-button\" data-path=\"{escaped_path}\">Delete</button>"
+            )
+        actions_html = " ".join(actions)
         table_rows.append(
             "<tr>"
             f"<td>{html_lib.escape(task['state']).capitalize()}</td>"
@@ -333,7 +333,7 @@ def mission_board():
             f"<td>{html_lib.escape(task['last_updated'])}</td>"
             f"<td><code>{html_lib.escape(task['path'])}</code></td>"
             f"<td>{goal_html}</td>"
-            f"<td><a href=\"{html_lib.escape(view_link)}\">View</a></td>"
+            f"<td>{actions_html}</td>"
             "</tr>"
         )
     if not table_rows:
@@ -373,6 +373,9 @@ def mission_board():
     #form-message {{margin-top: 0.45rem; font-weight: 600; min-height: 1.5rem;}}
     #form-message.success {{color: #0b6;}}
     #form-message.error {{color: #c00;}}
+    #delete-message {{margin-top: 0.45rem; font-weight: 600; min-height: 1.5rem;}}
+    #delete-message.success {{color: #0b6;}}
+    #delete-message.error {{color: #c00;}}
   </style>
 </head>
 <body>
@@ -426,6 +429,7 @@ def mission_board():
     </form>
     <div id="form-message" aria-live="polite"></div>
   </section>
+  <div id="delete-message" aria-live="polite"></div>
   <table>
     <thead>
       <tr><th>State</th><th>Status</th><th>Priority</th><th>Title</th><th>Last Updated (UTC)</th><th>File</th><th>Goal</th><th>Actions</th></tr>
@@ -461,11 +465,64 @@ def mission_board():
         message.className = "message error";
       }}
     }});
+    const deleteMessage = document.getElementById("delete-message");
+    const setDeleteMessage = (text, type = "") => {{
+      deleteMessage.textContent = text;
+      deleteMessage.className = type;
+    }};
+    document.querySelectorAll(".delete-task-button").forEach((button) => {{
+      button.addEventListener("click", async () => {{
+        const targetPath = button.dataset.path;
+        if (!targetPath) {{
+          return;
+        }}
+        if (!window.confirm("Delete inbox task " + targetPath + "?")) {{
+          return;
+        }}
+        setDeleteMessage("Deleting " + targetPath + "…", "");
+        try {{
+          const response = await fetch("/mission/delete-task", {{
+            method: "POST",
+            body: new URLSearchParams({{ path: targetPath }}),
+          }});
+          const payload = await response.json();
+          if (!response.ok) {{
+            throw new Error(payload.detail || payload.message || "Unable to delete task.");
+          }}
+          setDeleteMessage(payload.message || "Deleted " + targetPath + ".", "success");
+          setTimeout(() => {{
+            window.location.reload();
+          }}, 1200);
+        }} catch (error) {{
+          setDeleteMessage(error.message || "Unable to delete task.", "error");
+        }}
+      }});
+    }});
   </script>
 </body>
 </html>
 """
     return HTMLResponse(content=html_content)
+
+
+@app.post("/mission/delete-task")
+def delete_task(path: str = Form(...)):
+    _ensure_task_workspace()
+    task_file = _resolve_task_file(path)
+    try:
+        relative_path = task_file.relative_to(TASK_WORKSPACE)
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Task path resolution failed.")
+    if not relative_path.parts or relative_path.parts[0] != "inbox":
+        raise HTTPException(status_code=400, detail="Delete action is only allowed for tasks in inbox.")
+    try:
+        task_file.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to delete task: {exc}")
+    return {
+        "status": "ok",
+        "message": f"Deleted {relative_path}."
+    }
 
 
 @app.get("/mission/task", response_class=HTMLResponse)
