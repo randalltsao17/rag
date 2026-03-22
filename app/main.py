@@ -30,6 +30,8 @@ NOTES_DIR = Path("/notes")
 
 TASK_WORKSPACE = Path(os.getenv("TASK_WORKSPACE", "/workspace/shared/coding"))
 TASK_STATES = ["backlog", "inbox", "doing", "done", "failed"]
+
+RESEARCH_TOPICS_PATH = Path(os.getenv("RESEARCH_TOPICS_PATH", "/workspace/shared/research/topics.md"))
 MOVE_ALLOWED = {
     "backlog": "inbox",
     "inbox": "backlog",
@@ -106,6 +108,21 @@ def _describe_task(task_path: Path, state: str) -> dict:
         "path": str(relative_path),
     }
 
+
+
+def _read_research_topics() -> str:
+    """Read the research topics file and return its content.
+
+    Returns an empty string if the file does not exist, is not readable,
+    or is empty. The caller renders a fallback message when the result is falsy.
+    """
+    try:
+        if not RESEARCH_TOPICS_PATH.exists():
+            return ""
+        content = RESEARCH_TOPICS_PATH.read_text(encoding="utf-8").strip()
+        return content
+    except OSError:
+        return ""
 
 
 def _generate_task_filename(title_slug: str) -> str:
@@ -352,6 +369,7 @@ def mission_status():
 
 @app.get("/mission-board", response_class=HTMLResponse)
 def mission_board():
+    research_content = _read_research_topics()
     tasks = _collect_tasks()
     counts = _counts_for_tasks(tasks)
     total_tasks = sum(counts.values())
@@ -403,6 +421,11 @@ def mission_board():
                 f"<li>{html_lib.escape(state)}: {count}</li>"
             )
 
+    if research_content:
+        research_html = f"<pre>{html_lib.escape(research_content)}</pre>"
+    else:
+        research_html = "<p><em>No research topics found. Add content to the topics file to display it here.</em></p>"
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     default_title_placeholder = f"{today}-NNN-short-descriptive-title"
     default_description_placeholder = "Add a simple delete action for inbox markdown tasks in the mission board."
@@ -442,6 +465,10 @@ def mission_board():
 </head>
 <body>
   <h1>Mission Board</h1>
+  <section style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:0.75rem 1rem 1rem;margin-bottom:1.5rem;max-width:900px;">
+    <h2 style="margin-top:0;">Research Topics</h2>
+    {research_html}
+  </section>
   <p>Total tasks tracked: <strong>{total_tasks}</strong></p>
   <h2>Counts by bucket</h2>
   <ul>

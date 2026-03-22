@@ -3,12 +3,12 @@
 A lightweight Retrieval-Augmented Generation (RAG) playground for personal notes. It bundles a FastAPI service for ingesting Markdown files, a Postgres+pgvector database for storage, optional n8n automations, and helper scripts for turning PDFs into Markdown before ingestion.
 
 ## Features
-- **Markdown note ingestion** – `/ingest` hashes every Markdown file under the shared `/notes` volume and stores chunks plus OpenAI embeddings in Postgres.
-- **Semantic querying** – `/query` embeds ad-hoc questions, retrieves the most similar note chunks, and asks OpenAI to synthesize an answer that cites the source files.
-- **Containerized stack** – `docker-compose.yml` brings up pgvector, the FastAPI app, n8n, and Adminer for quick DB inspection.
-- **Mission board** – `/mission/status` summarizes the Markdown task files stored in `backlog/`, `inbox/`, `doing/`, `done/`, and `failed/`, and `/mission-board` renders the same data as a simple HTML table for quick visibility without UI polish. New tasks are created in `backlog/` and can be promoted to `inbox/` when ready for execution.
-- **Sample tooling** – scripts under `samples/` convert PDFs to Markdown (`pymupdf4llm`) and provide a CLI wrapper for querying the API.
-- **Automation hooks** – `n8n_init.sh` prepares the persistent volume so n8n workflows can orchestrate ingestion/alerts later on.
+- **Markdown note ingestion** - `/ingest` hashes every Markdown file under the shared `/notes` volume and stores chunks plus OpenAI embeddings in Postgres.
+- **Semantic querying** - `/query` embeds ad-hoc questions, retrieves the most similar note chunks, and asks OpenAI to synthesize an answer that cites the source files.
+- **Containerized stack** - `docker-compose.yml` brings up pgvector, the FastAPI app, n8n, and Adminer for quick DB inspection.
+- **Mission board** - `/mission/status` summarizes the Markdown task files stored in `backlog/`, `inbox/`, `doing/`, `done/`, and `failed/`, and `/mission-board` renders the same data as a simple HTML table for quick visibility without UI polish. New tasks are created in `backlog/` and can be promoted to `inbox/` when ready for execution.
+- **Sample tooling** - scripts under `samples/` convert PDFs to Markdown (`pymupdf4llm`) and provide a CLI wrapper for querying the API.
+- **Automation hooks** - `n8n_init.sh` prepares the persistent volume so n8n workflows can orchestrate ingestion/alerts later on.
 
 ## Architecture
 ```
@@ -55,7 +55,7 @@ The stack optionally exposes:
    ```bash
    ./n8n_init.sh
    ```
-5. **Mission board path configuration** – the app reads the shared task files from the `TASK_WORKSPACE` environment variable (default `/workspace/shared/coding` in containers). When running inside Docker Compose the workspace is mounted into `/workspace/shared/coding` and the compose file exports `TASK_WORKSPACE`, so the mission board can read `backlog/`, `inbox/`, `doing/`, `done/`, and `failed/`. For other setups, set `TASK_WORKSPACE` to the host path that holds the shared workspace.
+5. **Mission board path configuration** - the app reads the shared task files from the `TASK_WORKSPACE` environment variable (default `/workspace/shared/coding` in containers). When running inside Docker Compose the workspace is mounted into `/workspace/shared/coding` and the compose file exports `TASK_WORKSPACE`, so the mission board can read `backlog/`, `inbox/`, `doing/`, `done/`, and `failed/`. For other setups, set `TASK_WORKSPACE` to the host path that holds the shared workspace.
 
 ## Running the stack
 ```bash
@@ -67,7 +67,7 @@ Services:
 - n8n on <http://localhost:5678>
 - Adminer on <http://localhost:8080>
 
-> **Manual verification:** After `docker compose up -d`, run `docker compose ps`, then hit `GET http://localhost:8000/health` and `SELECT COUNT(*) FROM notes;` via Adminer or `psql` to confirm the API and database are reachable. Do not auto-start compose from scripts—you can copy/paste the command above manually.
+> **Manual verification:** After `docker compose up -d`, run `docker compose ps`, then hit `GET http://localhost:8000/health` and `SELECT COUNT(*) FROM notes;` via Adminer or `psql` to confirm the API and database are reachable. Do not auto-start compose from scripts-you can copy/paste the command above manually.
 
 > **Mission board path:** Docker Compose mounts the shared workspace at `/workspace/shared/coding` and sets `TASK_WORKSPACE` so `/mission/status` and `/mission-board` can read the markdown task files. If you run the app outside of Compose, make sure `TASK_WORKSPACE` points to the folder that contains `inbox/`, `doing/`, `done/`, and `failed/`.
 
@@ -81,8 +81,8 @@ Services:
 4. The DB schema is defined in `init.sql` and consists of `notes` + `note_chunks` tables plus the `vector` extension.
 
 ### Converting PDFs to Markdown
-- `samples/pdf.py` – quick single-file converter using `pymupdf4llm`.
-- `samples/pdf2md/pdf2.py` – batch converter for an entire folder.
+- `samples/pdf.py` - quick single-file converter using `pymupdf4llm`.
+- `samples/pdf2md/pdf2.py` - batch converter for an entire folder.
 - Place converted Markdown into `notes/` (or staging `raw_files/` → manual review → `notes/`).
 
 ## Querying notes
@@ -108,16 +108,20 @@ backlog/ → inbox/ → doing/ → done/
 - **Inbox → Backlog:** use the "Move to backlog" button to defer a task that is not yet ready.
 - **Delete:** only tasks in `backlog/` may be deleted from the UI.
 
-The `/mission-board` view surfaces a "Create a task" form that saves a new markdown file into `backlog/`. Only title, description, and priority are required — the form also accepts optional goal, acceptance criteria, files-to-modify, notes, and next-step hints. The filename is auto-generated as `YYYY-MM-DD-HHMMSS-short-title.md`. After submission the UI shows a short success message and reloads the page.
+The `/mission-board` view surfaces a "Create a task" form that saves a new markdown file into `backlog/`. Only title, description, and priority are required - the form also accepts optional goal, acceptance criteria, files-to-modify, notes, and next-step hints. The filename is auto-generated as `YYYY-MM-DD-HHMMSS-short-title.md`. After submission the UI shows a short success message and reloads the page.
 
 The mission board table includes a "View" action that navigates to `/mission/task?path=<state>/<filename>`, making it easy to read a task's markdown body without navigating the workspace directly.
 
 ### Move endpoint
 `POST /mission/move-task` accepts a `path` form field (e.g. `backlog/my-task.md`) and moves the file to the target bucket (`backlog` ↔ `inbox`). Returns `409` if a file with the same name already exists in the target.
+
+### Research Topics section
+The `/mission-board` page includes a **Research Topics** section at the top. The app reads content from the file at `RESEARCH_TOPICS_PATH` (default: `/workspace/shared/research/topics.md`). If the file is missing, empty, or unreadable, a clear fallback message is shown instead of an error. Content is displayed as preformatted plain text, HTML-escaped for safety. The feature is read-only: the app never writes to the research topics file.
+
 ## App-only test compose
 - `docker-compose.test.yml` spins up only the FastAPI app (no database or n8n) so you can debug mission board logic without touching the main stack.
-- The test service uses `TASK_WORKSPACE=/workspace/shared/coding`, mounts the shared workspace read-only, binds the app code and notes, and exposes the app on port `18000` so it never conflicts with the running production port.
-- Run it with `docker compose -f docker-compose.test.yml -p rag-test up --build`, then hit <http://localhost:18000/mission-board> to verify the UI, create-task flow, and health endpoints. When you’re done, tear it down with `docker compose -f docker-compose.test.yml -p rag-test down` so the container names stay isolated.
+- The test service uses `TASK_WORKSPACE=/workspace/shared/coding` and `RESEARCH_TOPICS_PATH=/workspace/shared/research/topics.md`, mounts the shared workspace and research folder (read-only), and exposes the app on port `18000` so it never conflicts with the running production port.
+- Run it with `docker compose -f docker-compose.test.yml -p rag-test up --build`, then hit <http://localhost:18000/mission-board> to verify the UI, create-task flow, and health endpoints. When you're done, tear it down with `docker compose -f docker-compose.test.yml -p rag-test down` so the container names stay isolated.
 
 ## Directory overview
 ```

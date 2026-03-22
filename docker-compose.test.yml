@@ -7,10 +7,12 @@ services:
       - .env
     environment:
       - TASK_WORKSPACE=/workspace/shared/coding
+      - RESEARCH_TOPICS_PATH=/workspace/shared/research/topics.md
     volumes:
       - ./app:/app
       - ./notes:/notes
       - ../../:/workspace/shared/coding
+      - ../../../research:/workspace/shared/research:ro
     command: bash -lc "pip install -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8000"
     ports:
       - "18000:8000"
