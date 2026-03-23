@@ -110,6 +110,29 @@ def _describe_task(task_path: Path, state: str) -> dict:
 
 
 
+def _read_latest_log() -> tuple[str, str]:
+    """Find and read the latest daily log from TASK_WORKSPACE/logs/.
+
+    Returns a tuple of (filename, content). Both are empty strings when no log
+    file is found or the directory is missing/unreadable.
+    """
+    try:
+        logs_dir = TASK_WORKSPACE / "logs"
+        if not logs_dir.exists() or not logs_dir.is_dir():
+            return ("", "")
+        candidates = sorted(
+            (f for f in logs_dir.glob("*.md") if f.name != "LOG_TEMPLATE.md"),
+            key=lambda f: f.name,
+        )
+        if not candidates:
+            return ("", "")
+        latest = candidates[-1]
+        content = latest.read_text(encoding="utf-8").strip()
+        return (latest.name, content)
+    except OSError:
+        return ("", "")
+
+
 def _read_research_topics() -> str:
     """Read the research topics file and return its content.
 
@@ -370,6 +393,7 @@ def mission_status():
 @app.get("/mission-board", response_class=HTMLResponse)
 def mission_board():
     research_content = _read_research_topics()
+    latest_log_filename, latest_log_content = _read_latest_log()
     tasks = _collect_tasks()
     counts = _counts_for_tasks(tasks)
     total_tasks = sum(counts.values())
@@ -426,6 +450,19 @@ def mission_board():
     else:
         research_html = "<p><em>No research topics found. Add content to the topics file to display it here.</em></p>"
 
+    if latest_log_filename and latest_log_content:
+        latest_log_html = (
+            f"<p><strong>File:</strong> <code>{html_lib.escape(latest_log_filename)}</code></p>"
+            f"<pre>{html_lib.escape(latest_log_content)}</pre>"
+        )
+    elif latest_log_filename:
+        latest_log_html = (
+            f"<p><strong>File:</strong> <code>{html_lib.escape(latest_log_filename)}</code></p>"
+            "<p><em>Log file is empty.</em></p>"
+        )
+    else:
+        latest_log_html = "<p><em>No daily log found. Logs are written to <code>logs/</code> inside the shared workspace.</em></p>"
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     default_title_placeholder = f"{today}-NNN-short-descriptive-title"
     default_description_placeholder = "Add a simple delete action for inbox markdown tasks in the mission board."
@@ -468,6 +505,10 @@ def mission_board():
   <section style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:0.75rem 1rem 1rem;margin-bottom:1.5rem;max-width:900px;">
     <h2 style="margin-top:0;">Research Topics</h2>
     {research_html}
+  </section>
+  <section style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:0.75rem 1rem 1rem;margin-bottom:1.5rem;max-width:900px;">
+    <h2 style="margin-top:0;">Latest Agent Log</h2>
+    {latest_log_html}
   </section>
   <p>Total tasks tracked: <strong>{total_tasks}</strong></p>
   <h2>Counts by bucket</h2>

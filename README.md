@@ -118,6 +118,18 @@ The mission board table includes a "View" action that navigates to `/mission/tas
 ### Research Topics section
 The `/mission-board` page includes a **Research Topics** section at the top. The app reads content from the file at `RESEARCH_TOPICS_PATH` (default: `/workspace/shared/research/topics.md`). If the file is missing, empty, or unreadable, a clear fallback message is shown instead of an error. Content is displayed as preformatted plain text, HTML-escaped for safety. The feature is read-only: the app never writes to the research topics file.
 
+### Latest Agent Log section
+The `/mission-board` page includes a **Latest Agent Log** section directly below Research Topics. The app scans `TASK_WORKSPACE/logs/` for `.md` files (excluding `LOG_TEMPLATE.md`), picks the lexicographically last file (i.e. the most recent date-named file), and displays its filename and full content as preformatted HTML-escaped text. If the `logs/` directory is missing or contains no eligible files, a clear fallback message is shown. The feature is read-only: the app never writes to any log file. No new volume mounts are required — the logs directory lives inside the existing `TASK_WORKSPACE` mount.
+
+**Manual test steps:**
+1. Start the app-only test compose: `docker compose -f docker-compose.test.yml -p rag-test up --build`
+2. Open <http://localhost:18000/mission-board> in a browser.
+3. Confirm the "Latest Agent Log" section is visible between Research Topics and the task counts.
+4. Confirm the filename shown matches the most recent `.md` file inside `workspace/shared/coding/logs/` (e.g. `2026-03-23.md`).
+5. Confirm the log body is readable preformatted text.
+6. Optionally rename all log `.md` files temporarily to verify the fallback message appears.
+7. Tear down: `docker compose -f docker-compose.test.yml -p rag-test down`
+
 ## App-only test compose
 - `docker-compose.test.yml` spins up only the FastAPI app (no database or n8n) so you can debug mission board logic without touching the main stack.
 - The test service uses `TASK_WORKSPACE=/workspace/shared/coding` and `RESEARCH_TOPICS_PATH=/workspace/shared/research/topics.md`, mounts the shared workspace and research folder (read-only), and exposes the app on port `18000` so it never conflicts with the running production port.
