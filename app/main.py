@@ -148,6 +148,23 @@ def _read_research_topics() -> str:
         return ""
 
 
+def _write_research_topics(content: str) -> None:
+    """Write the research topics file.
+
+    Raises HTTPException if the path is not the expected research topics file
+    or if the file cannot be written.
+    """
+    resolved = RESEARCH_TOPICS_PATH.resolve()
+    expected = RESEARCH_TOPICS_PATH.resolve()
+    if resolved != expected:
+        raise HTTPException(status_code=400, detail="Invalid research topics path.")
+    try:
+        RESEARCH_TOPICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        RESEARCH_TOPICS_PATH.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to write research topics: {exc}")
+
+
 def _generate_task_filename(title_slug: str) -> str:
     now = datetime.now(timezone.utc)
     date_prefix = now.strftime("%Y-%m-%d")
@@ -492,6 +509,12 @@ def mission_board():
     #create-task-form textarea {{resize: vertical; min-height: 60px;}}
     #create-task-form button {{align-self: flex-start; padding: 0.55rem 1.1rem; border: none; border-radius: 4px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; transition: background 0.2s ease;}}
     #create-task-form button:hover {{background: #1d4ed8;}}
+    #research-edit-form textarea {{font-family: inherit; font-size: 0.95rem; padding: 0.45rem 0.55rem; border: 1px solid #c0c0c0; border-radius: 4px; background: #fff; width: 100%; box-sizing: border-box; resize: vertical; min-height: 120px;}}
+    #research-edit-form button {{margin-top: 0.5rem; padding: 0.45rem 1rem; border: none; border-radius: 4px; background: #0b6; color: #fff; font-weight: 600; cursor: pointer; transition: background 0.2s ease;}}
+    #research-edit-form button:hover {{background: #099;}}
+    #research-message {{margin-top: 0.4rem; font-weight: 600; min-height: 1.4rem;}}
+    #research-message.success {{color: #0b6;}}
+    #research-message.error {{color: #c00;}}
     #form-message {{margin-top: 0.45rem; font-weight: 600; min-height: 1.5rem;}}
     #form-message.success {{color: #0b6;}}
     #form-message.error {{color: #c00;}}
@@ -505,6 +528,14 @@ def mission_board():
   <section style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:0.75rem 1rem 1rem;margin-bottom:1.5rem;max-width:900px;">
     <h2 style="margin-top:0;">Research Topics</h2>
     {research_html}
+    <details style="margin-top:0.75rem;">
+      <summary style="cursor:pointer;font-weight:600;color:#2563eb;">Edit research topic</summary>
+      <form id="research-edit-form" style="margin-top:0.6rem;">
+        <textarea name="content" rows="10">{html_lib.escape(research_content)}</textarea>
+        <button type="submit">Save</button>
+      </form>
+      <div id="research-message" aria-live="polite"></div>
+    </details>
   </section>
   <section style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:0.75rem 1rem 1rem;margin-bottom:1.5rem;max-width:900px;">
     <h2 style="margin-top:0;">Latest Agent Log</h2>
@@ -569,6 +600,29 @@ def mission_board():
     <div id="form-message" aria-live="polite"></div>
   </section>
   <script>
+    const researchForm = document.getElementById("research-edit-form");
+    const researchMessage = document.getElementById("research-message");
+    researchForm.addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      researchMessage.textContent = "Saving…";
+      researchMessage.className = "";
+      try {{
+        const response = await fetch("/mission/update-research-topic", {{
+          method: "POST",
+          body: new URLSearchParams(new FormData(researchForm)),
+        }});
+        const payload = await response.json();
+        if (!response.ok) {{
+          throw new Error(payload.detail || payload.message || "Unable to save research topic.");
+        }}
+        researchMessage.textContent = payload.message || "Saved.";
+        researchMessage.className = "success";
+        setTimeout(() => {{ window.location.reload(); }}, 1200);
+      }} catch (error) {{
+        researchMessage.textContent = error.message || "Unable to save research topic.";
+        researchMessage.className = "error";
+      }}
+    }});
     const form = document.getElementById("create-task-form");
     const message = document.getElementById("form-message");
     form.addEventListener("submit", async (event) => {{
@@ -659,6 +713,14 @@ def mission_board():
 </html>
 """
     return HTMLResponse(content=html_content)
+
+
+@app.post("/mission/update-research-topic")
+def update_research_topic(content: str = Form(...)):
+    """Update the research topics file with the provided content."""
+    safe_content = content.strip()
+    _write_research_topics(safe_content + "\n" if safe_content else "")
+    return {"status": "ok", "message": "Research topic updated."}
 
 
 @app.post("/mission/delete-task")
