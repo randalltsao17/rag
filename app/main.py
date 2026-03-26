@@ -512,6 +512,8 @@ def mission_board():
     #research-edit-form textarea {{font-family: inherit; font-size: 0.95rem; padding: 0.45rem 0.55rem; border: 1px solid #c0c0c0; border-radius: 4px; background: #fff; width: 100%; box-sizing: border-box; resize: vertical; min-height: 120px;}}
     #research-edit-form button {{margin-top: 0.5rem; padding: 0.45rem 1rem; border: none; border-radius: 4px; background: #0b6; color: #fff; font-weight: 600; cursor: pointer; transition: background 0.2s ease;}}
     #research-edit-form button:hover {{background: #099;}}
+    #research-cancel-button {{background: #6b7280;}}
+    #research-cancel-button:hover {{background: #4b5563;}}
     #research-message {{margin-top: 0.4rem; font-weight: 600; min-height: 1.4rem;}}
     #research-message.success {{color: #0b6;}}
     #research-message.error {{color: #c00;}}
@@ -532,7 +534,10 @@ def mission_board():
       <summary style="cursor:pointer;font-weight:600;color:#2563eb;">Edit research topic</summary>
       <form id="research-edit-form" style="margin-top:0.6rem;">
         <textarea name="content" rows="10">{html_lib.escape(research_content)}</textarea>
-        <button type="submit">Save</button>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <button type="submit">Save</button>
+          <button type="button" id="research-cancel-button">Cancel</button>
+        </div>
       </form>
       <div id="research-message" aria-live="polite"></div>
     </details>
@@ -602,6 +607,9 @@ def mission_board():
   <script>
     const researchForm = document.getElementById("research-edit-form");
     const researchMessage = document.getElementById("research-message");
+    const researchTextarea = researchForm.querySelector("textarea[name='content']");
+    const researchCancelButton = document.getElementById("research-cancel-button");
+    let savedResearchContent = researchTextarea ? researchTextarea.value : "";
     researchForm.addEventListener("submit", async (event) => {{
       event.preventDefault();
       researchMessage.textContent = "Saving…";
@@ -615,6 +623,7 @@ def mission_board():
         if (!response.ok) {{
           throw new Error(payload.detail || payload.message || "Unable to save research topic.");
         }}
+        savedResearchContent = researchTextarea ? researchTextarea.value : savedResearchContent;
         researchMessage.textContent = payload.message || "Saved.";
         researchMessage.className = "success";
         setTimeout(() => {{ window.location.reload(); }}, 1200);
@@ -623,6 +632,14 @@ def mission_board():
         researchMessage.className = "error";
       }}
     }});
+    if (researchCancelButton && researchTextarea) {{
+      researchCancelButton.addEventListener("click", () => {{
+        researchTextarea.value = savedResearchContent;
+        researchMessage.textContent = "Changes discarded.";
+        researchMessage.className = "";
+        setTimeout(() => {{ researchMessage.textContent = ""; }}, 1500);
+      }});
+    }}
     const form = document.getElementById("create-task-form");
     const message = document.getElementById("form-message");
     form.addEventListener("submit", async (event) => {{

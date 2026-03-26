@@ -116,7 +116,26 @@ The mission board table includes a "View" action that navigates to `/mission/tas
 `POST /mission/move-task` accepts a `path` form field (e.g. `backlog/my-task.md`) and moves the file to the target bucket (`backlog` ↔ `inbox`). Returns `409` if a file with the same name already exists in the target.
 
 ### Research Topics section
-The `/mission-board` page includes a **Research Topics** section at the top. The app reads content from the file at `RESEARCH_TOPICS_PATH` (default: `/workspace/shared/research/topics.md`). If the file is missing, empty, or unreadable, a clear fallback message is shown instead of an error. Content is displayed as preformatted plain text, HTML-escaped for safety. The feature is read-only: the app never writes to the research topics file.
+The `/mission-board` page includes a **Research Topics** section at the top. The app reads content from the file at `RESEARCH_TOPICS_PATH` (default: `/workspace/shared/research/topics.md`). If the file is missing, empty, or unreadable, a clear fallback message is shown instead of an error. Content is displayed as preformatted plain text, HTML-escaped for safety.
+
+An **Edit research topic** disclosure widget allows inline editing:
+- Click "Edit research topic" to expand the textarea pre-filled with the current content.
+- Click **Save** to POST the edited content to `/mission/update-research-topic`; a success message is shown and the page reloads after 1.2 s.
+- Click **Cancel** to discard unsaved edits and restore the last saved content in the textarea without a page reload.
+- If the save request fails, an error message is shown and the textarea retains the unsaved content.
+- The `RESEARCH_TOPICS_PATH` is fixed at startup; only that one file may be written — arbitrary paths are rejected.
+
+**Manual test steps:**
+1. Start the app-only test compose: `docker compose -f docker-compose.test.yml -p rag-test up --build`
+2. Open <http://localhost:18000/mission-board> in a browser.
+3. Confirm the "Research Topics" section is visible near the top.
+4. If the topics file exists and has content, confirm it is shown as preformatted text.
+5. If the file is absent or empty, confirm the fallback message is shown.
+6. Click "Edit research topic" to expand the edit form.
+7. Confirm the textarea is pre-filled with the current saved content (or blank if no file).
+8. Edit the textarea and click **Cancel** — confirm the textarea reverts to the previously saved content and a "Changes discarded." message briefly appears.
+9. Edit the textarea again and click **Save** — confirm a success message appears and the page reloads showing the new content.
+10. Tear down: `docker compose -f docker-compose.test.yml -p rag-test down`
 
 ### Latest Agent Log section
 The `/mission-board` page includes a **Latest Agent Log** section directly below Research Topics. The app scans `TASK_WORKSPACE/logs/` for `.md` files (excluding `LOG_TEMPLATE.md`), picks the lexicographically last file (i.e. the most recent date-named file), and displays its filename and full content as preformatted HTML-escaped text. If the `logs/` directory is missing or contains no eligible files, a clear fallback message is shown. The feature is read-only: the app never writes to any log file. No new volume mounts are required — the logs directory lives inside the existing `TASK_WORKSPACE` mount.
