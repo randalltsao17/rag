@@ -481,13 +481,41 @@ def mission_board():
         latest_log_html = "<p><em>No daily log found. Logs are written to <code>logs/</code> inside the shared workspace.</em></p>"
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    default_title_placeholder = f"{today}-NNN-short-descriptive-title"
-    default_description_placeholder = "Add a simple delete action for inbox markdown tasks in the mission board."
-    default_goal_placeholder = "Allow safe deletion of unprocessed inbox markdown tasks from the mission board UI."
-    default_acceptance_placeholder = "- [ ] The feature works as expected\n- [ ] Validation is recorded clearly\n- [ ] The task file and daily log are updated"
-    default_files_placeholder = "github/rag/app/main.py\ngithub/rag/docker-compose.test.yml\nrelated HTML/template files if needed"
-    default_notes_placeholder = "Any extra context, constraints, or background information."
-    default_next_step_placeholder = "Inspect the current implementation and apply the smallest safe change first."
+    task_template_default = html_lib.escape(
+        f"# Task: short-descriptive-title\n"
+        f"\n"
+        f"## Title\n"
+        f"Short descriptive title\n"
+        f"\n"
+        f"## Description\n"
+        f"Describe the task clearly.\n"
+        f"\n"
+        f"## Priority\n"
+        f"Medium\n"
+        f"\n"
+        f"## Status\n"
+        f"Backlog\n"
+        f"\n"
+        f"## Goal\n"
+        f"What outcome does this task achieve?\n"
+        f"\n"
+        f"## Acceptance Criteria\n"
+        f"- [ ] The feature works as expected\n"
+        f"- [ ] Validation is recorded clearly\n"
+        f"- [ ] The task file and daily log are updated\n"
+        f"\n"
+        f"## Files to Modify\n"
+        f"- list relevant files here\n"
+        f"\n"
+        f"## Notes\n"
+        f"Any extra context, constraints, or background information.\n"
+        f"\n"
+        f"## Progress Log\n"
+        f"- [{today}] Task created\n"
+        f"\n"
+        f"## Next Step\n"
+        f"Inspect the current implementation and apply the smallest safe change first.\n"
+    )
 
     html_content = f"""<!doctype html>
 <html lang="en">
@@ -562,43 +590,11 @@ def mission_board():
   </table>
   <section class="form-card">
     <h2>Create a task</h2>
-    <p>Fill the fields below to save a new task into the <strong>backlog</strong>. Move it to inbox when it is ready for execution. Placeholder text shows example values — replace with your own.</p>
+    <p>Edit the markdown template below and submit to save a new task into the <strong>backlog</strong>. Move it to inbox when it is ready for execution.</p>
     <form id="create-task-form">
-      <label>
-        Title
-        <input name="title" required maxlength="120" placeholder="{default_title_placeholder}" />
-      </label>
-      <label>
-        Description
-        <textarea name="description" required rows="3" placeholder="{default_description_placeholder}"></textarea>
-      </label>
-      <label>
-        Priority
-        <select name="priority">
-          <option>High</option>
-          <option selected>Medium</option>
-          <option>Low</option>
-        </select>
-      </label>
-      <label>
-        Goal (optional)
-        <textarea name="goal" rows="2" placeholder="{default_goal_placeholder}"></textarea>
-      </label>
-      <label>
-        Acceptance Criteria (optional)
-        <textarea name="acceptance_criteria" rows="4" placeholder="{default_acceptance_placeholder}"></textarea>
-      </label>
-      <label>
-        Files to Modify (optional)
-        <textarea name="files_to_modify" rows="3" placeholder="{default_files_placeholder}"></textarea>
-      </label>
-      <label>
-        Notes (optional)
-        <textarea name="notes" rows="2" placeholder="{default_notes_placeholder}"></textarea>
-      </label>
-      <label>
-        Next Step (optional)
-        <input name="next_step" placeholder="{default_next_step_placeholder}" />
+      <label style="font-weight:600;">
+        Task markdown
+        <textarea name="markdown_content" required rows="30" style="font-family: monospace; font-size: 0.9rem; width: 100%; box-sizing: border-box; resize: vertical; min-height: 400px;">{task_template_default}</textarea>
       </label>
       <button type="submit">Create task</button>
     </form>
@@ -998,23 +994,20 @@ def query_notes(req: QueryRequest):
 
 @app.post("/mission/create-task")
 def create_task(
-    title: str = Form(...),
-    description: str = Form(...),
-    priority: str = Form("Medium"),
-    goal: str = Form(""),
-    acceptance_criteria: str = Form(""),
-    files_to_modify: str = Form(""),
-    notes: str = Form(""),
-    next_step: str = Form("Review task and begin implementation."),
+    markdown_content: str = Form(...),
 ) -> dict:
-    title_text = title.strip() or "Untitled task"
-    description_text = description.strip() or "Description forthcoming."
-    priority_text = priority.strip() or "Medium"
-    goal_text = goal.strip() or "Review task and begin implementation"
-    acceptance_text = acceptance_criteria.strip()
-    files_text = files_to_modify.strip()
-    notes_text = notes.strip()
-    next_step_text = next_step.strip() or "Review task and begin implementation."
+    content = markdown_content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Task content must not be empty.")
+
+    # Extract title from ## Title section, or fall back to # Task: heading
+    title_text = _extract_section(content, "Title").strip()
+    if not title_text:
+        for line in content.splitlines():
+            if line.startswith("# Task:"):
+                title_text = line[len("# Task:"):].strip()
+                break
+    title_text = title_text or "untitled-task"
 
     _ensure_task_workspace()
     backlog_dir = TASK_WORKSPACE / "backlog"
@@ -1023,17 +1016,6 @@ def create_task(
     slug = _slugify_title(title_text)
     filename = _generate_task_filename(slug)
     task_path = backlog_dir / filename
-
-    content = _task_template(
-        title=title_text,
-        description=description_text,
-        priority=priority_text,
-        goal=goal_text,
-        acceptance_criteria=acceptance_text,
-        files_to_modify=files_text,
-        notes=notes_text,
-        next_step=next_step_text,
-    )
 
     task_path.write_text(content, encoding="utf-8")
     try:
