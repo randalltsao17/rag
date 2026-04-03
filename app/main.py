@@ -91,7 +91,7 @@ def _describe_task(task_path: Path, state: str) -> dict:
     status = status_field or state.capitalize()
     goal = _clean_text_block(_extract_section(content, "Goal"))
     description = _clean_text_block(_extract_section(content, "Description"))
-    updated = datetime.fromtimestamp(task_path.stat().st_mtime, timezone.utc).isoformat()
+    updated = datetime.fromtimestamp(task_path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M")
     try:
         relative_path = task_path.relative_to(TASK_WORKSPACE)
     except ValueError:
@@ -407,6 +407,80 @@ def mission_status():
     }
 
 
+def _simple_md_to_html(md: str) -> str:
+    """Convert a small subset of markdown to HTML for display purposes.
+
+    Handles: headings (h1-h3), bold, inline code, fenced code blocks,
+    unordered list items, horizontal rules, and paragraphs.
+    No external dependency required.
+    """
+    import re
+    lines = md.splitlines()
+    out: list[str] = []
+    in_code_block = False
+    para_buf: list[str] = []
+
+    def flush_para() -> None:
+        text = " ".join(para_buf).strip()
+        if text:
+            out.append(f"<p>{text}</p>")
+        para_buf.clear()
+
+    def inline(text: str) -> str:
+        # Bold **text**
+        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+        # Inline code `text`
+        text = re.sub(r"`([^`]+)`", lambda m: f"<code>{html_lib.escape(m.group(1))}</code>", text)
+        return text
+
+    for line in lines:
+        if line.startswith("```"):
+            if in_code_block:
+                out.append("</code></pre>")
+                in_code_block = False
+            else:
+                flush_para()
+                out.append('<pre><code>')
+                in_code_block = True
+            continue
+        if in_code_block:
+            out.append(html_lib.escape(line))
+            continue
+        # Headings
+        m = re.match(r"^(#{1,3})\s+(.*)", line)
+        if m:
+            flush_para()
+            lvl = len(m.group(1)) + 1  # h2-h4 (h1 reserved for page title)
+            lvl = min(lvl, 4)
+            out.append(f"<h{lvl}>{html_lib.escape(m.group(2))}</h{lvl}>")
+            continue
+        # HR
+        if re.match(r"^[-*_]{3,}\s*$", line):
+            flush_para()
+            out.append("<hr>")
+            continue
+        # Unordered list
+        m2 = re.match(r"^[\*\-]\s+(.*)", line)
+        if m2:
+            flush_para()
+            out.append(f"<li>{inline(html_lib.escape(m2.group(1)))}</li>")
+            continue
+        # Blank line → paragraph break
+        if not line.strip():
+            flush_para()
+            continue
+        para_buf.append(inline(html_lib.escape(line)))
+
+    flush_para()
+    if in_code_block:
+        out.append("</code></pre>")
+
+    # Wrap consecutive <li> in <ul>
+    result = "\n".join(out)
+    result = re.sub(r"((?:<li>.*?</li>\n?)+)", lambda m: f"<ul>{m.group(0)}</ul>", result)
+    return result
+
+
 @app.get("/mission-board", response_class=HTMLResponse)
 def mission_board():
     research_content = _read_research_topics()
@@ -414,42 +488,84 @@ def mission_board():
     tasks = _collect_tasks()
     counts = _counts_for_tasks(tasks)
     total_tasks = sum(counts.values())
-    table_rows = []
+
+    # Group tasks by state
+    tasks_by_state: dict[str, list] = {state: [] for state in TASK_STATES}
     for task in tasks:
-        goal_text = task.get("goal") or "—"
-        goal_html = html_lib.escape(goal_text).replace("\n", "<br />")
-        view_link = f"/mission/task?path={quote(task['path'])}"
-        state_val = task.get("state", "")
-        escaped_path = html_lib.escape(task["path"])
-        actions = [
-            f"<a href=\"{html_lib.escape(view_link)}\">View</a>"
-        ]
-        if state_val == "backlog":
-            actions.append(
-                f"<button type=\"button\" class=\"move-task-button\" data-path=\"{escaped_path}\" data-label=\"Move to inbox\">Move to inbox</button>"
-            )
-            actions.append(
-                f"<button type=\"button\" class=\"delete-task-button\" data-path=\"{escaped_path}\">Delete</button>"
-            )
-        elif state_val == "inbox":
-            actions.append(
-                f"<button type=\"button\" class=\"move-task-button\" data-path=\"{escaped_path}\" data-label=\"Move to backlog\">Move to backlog</button>"
-            )
-        actions_html = " ".join(actions)
-        table_rows.append(
-            "<tr>"
-            f"<td>{html_lib.escape(task['state']).capitalize()}</td>"
-            f"<td>{html_lib.escape(task['status'])}</td>"
-            f"<td>{html_lib.escape(task['priority'])}</td>"
-            f"<td>{html_lib.escape(task['title'])}</td>"
-            f"<td>{html_lib.escape(task['last_updated'])}</td>"
-            f"<td><code>{html_lib.escape(task['path'])}</code></td>"
-            f"<td>{goal_html}</td>"
-            f"<td>{actions_html}</td>"
-            "</tr>"
+        s = task.get("state", "")
+        if s in tasks_by_state:
+            tasks_by_state[s].append(task)
+
+    def _priority_badge(priority: str) -> str:
+        p = priority.strip().lower()
+        if p == "high":
+            color = "#dc2626"; bg = "#fee2e2"
+        elif p == "medium":
+            color = "#d97706"; bg = "#fef3c7"
+        elif p == "low":
+            color = "#16a34a"; bg = "#dcfce7"
+        else:
+            color = "#6b7280"; bg = "#f3f4f6"
+        return (
+            f'<span style="display:inline-block;padding:0.1rem 0.45rem;border-radius:9999px;'
+            f'font-size:0.78rem;font-weight:700;color:{color};background:{bg};">'
+            f'{html_lib.escape(priority)}</span>'
         )
-    if not table_rows:
-        table_rows.append('<tr><td colspan="8">No tasks found.</td></tr>')
+
+    def _build_table(state_tasks: list, state_val: str) -> str:
+        if not state_tasks:
+            return f'<p style="color:#9ca3af;font-style:italic;">No tasks in {state_val}.</p>'
+        rows = []
+        for task in state_tasks:
+            goal_text = task.get("goal") or "—"
+            goal_html = html_lib.escape(goal_text).replace("\n", "<br />")
+            view_link = f"/mission/task?path={quote(task['path'])}"
+            escaped_path = html_lib.escape(task["path"])
+            filename_only = html_lib.escape(task.get("filename", task["path"]))
+            actions = [f'<a href="{html_lib.escape(view_link)}">View</a>']
+            if state_val == "backlog":
+                actions.append(
+                    f'<button type="button" class="move-task-button" data-path="{escaped_path}" data-label="Move to inbox">→ Inbox</button>'
+                )
+                actions.append(
+                    f'<button type="button" class="delete-task-button" data-path="{escaped_path}">Delete</button>'
+                )
+            elif state_val == "inbox":
+                actions.append(
+                    f'<button type="button" class="move-task-button" data-path="{escaped_path}" data-label="Move to backlog">← Backlog</button>'
+                )
+            actions_html = " ".join(actions)
+            rows.append(
+                "<tr>"
+                f"<td>{_priority_badge(task['priority'])}</td>"
+                f"<td>{html_lib.escape(task['title'])}</td>"
+                f"<td>{html_lib.escape(task['last_updated'])}</td>"
+                f'<td><code title="{escaped_path}">{filename_only}</code></td>'
+                f"<td>{goal_html}</td>"
+                f"<td>{actions_html}</td>"
+                "</tr>"
+            )
+        return (
+            '<table>'
+            '<thead><tr>'
+            '<th>Priority</th><th>Title</th><th>Updated (UTC)</th>'
+            '<th>File</th><th>Goal</th><th>Actions</th>'
+            '</tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody>'
+            '</table>'
+        )
+
+    state_sections_html = []
+    for state in TASK_STATES:
+        state_tasks = tasks_by_state.get(state, [])
+        count = len(state_tasks)
+        table_html = _build_table(state_tasks, state)
+        state_sections_html.append(
+            f'<section class="state-section">'
+            f'<h2>{html_lib.escape(state.capitalize())} <span class="count-badge">{count}</span></h2>'
+            f'{table_html}'
+            f'</section>'
+        )
 
     count_items = []
     for state in TASK_STATES:
@@ -463,14 +579,14 @@ def mission_board():
             )
 
     if research_content:
-        research_html = f"<pre>{html_lib.escape(research_content)}</pre>"
+        research_html = _simple_md_to_html(research_content)
     else:
         research_html = "<p><em>No research topics found. Add content to the topics file to display it here.</em></p>"
 
     if latest_log_filename and latest_log_content:
         latest_log_html = (
             f"<p><strong>File:</strong> <code>{html_lib.escape(latest_log_filename)}</code></p>"
-            f"<pre>{html_lib.escape(latest_log_content)}</pre>"
+            + _simple_md_to_html(latest_log_content)
         )
     elif latest_log_filename:
         latest_log_html = (
@@ -523,19 +639,42 @@ def mission_board():
   <meta charset="utf-8">
   <title>Mission Board</title>
   <style>
-    body {{font-family: system-ui, sans-serif; margin: 1.5rem;}}
-    table {{width: 100%; border-collapse: collapse; margin-top: 1rem;}}
-    th, td {{border: 1px solid #d0d0d0; padding: 0.4rem 0.6rem; text-align: left;}}
-    th {{background: #f3f3f3;}}
-    code {{background: #f9f9f9; padding: 0.1rem 0.3rem; border-radius: 3px;}}
-    .form-card {{background: #fefefe; border: 1px solid #ececec; border-radius: 8px; padding: 1rem 1.25rem 1.5rem; margin-top: 2rem; margin-bottom: 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,0.05);}}
+    *, *::before, *::after {{box-sizing: border-box;}}
+    body {{font-family: system-ui, sans-serif; margin: 0; padding: 1.5rem; background: #f9fafb; color: #111;}}
+    .container {{max-width: 1100px; margin: 0 auto;}}
+    h1 {{margin-top: 0; font-size: 1.75rem;}}
+    h2 {{font-size: 1.2rem; margin-top: 0;}}
+    table {{width: 100%; border-collapse: collapse; margin-top: 0.6rem; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.07);}}
+    th, td {{border: 1px solid #e5e7eb; padding: 0.4rem 0.65rem; text-align: left; vertical-align: top;}}
+    th {{background: #f3f4f6; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.03em; color: #374151;}}
+    td {{font-size: 0.9rem;}}
+    code {{background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.82rem; word-break: break-all;}}
+    pre {{background: #f1f5f9; padding: 0.75rem 1rem; border-radius: 5px; overflow-x: auto; font-size: 0.85rem; margin: 0.5rem 0;}}
+    pre code {{background: transparent; padding: 0; font-size: inherit;}}
+    a {{color: #2563eb; text-decoration: none;}}
+    a:hover {{text-decoration: underline;}}
+    button {{cursor: pointer; border: none; border-radius: 4px; font-size: 0.82rem; font-weight: 600; padding: 0.25rem 0.6rem; transition: background 0.15s ease; margin-right: 0.25rem; margin-bottom: 0.2rem;}}
+    .move-task-button {{background: #e0f2fe; color: #0369a1;}}
+    .move-task-button:hover {{background: #bae6fd;}}
+    .delete-task-button {{background: #fee2e2; color: #b91c1c;}}
+    .delete-task-button:hover {{background: #fecaca;}}
+    .count-badge {{display: inline-block; background: #e5e7eb; color: #374151; border-radius: 9999px; font-size: 0.72rem; font-weight: 700; padding: 0.05rem 0.5rem; vertical-align: middle; margin-left: 0.35rem;}}
+    .state-section {{background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05);}}
+    .state-section table {{box-shadow: none; border-radius: 0; margin-top: 0.5rem;}}
+    .info-card {{background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.85rem 1.15rem 1rem; margin-bottom: 1.25rem;}}
+    .info-card h2 {{margin-bottom: 0.5rem;}}
+    .info-card ul {{margin: 0.25rem 0; padding-left: 1.4rem;}}
+    .info-card li {{margin: 0.15rem 0;}}
+    .info-card p {{margin: 0.3rem 0;}}
+    .divider {{border: none; border-top: 2px solid #e5e7eb; margin: 2rem 0;}}
+    .form-card {{background: #fefefe; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem 1.25rem 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,0.05);}}
     #create-task-form {{display: grid; gap: 0.75rem; max-width: 720px;}}
     #create-task-form label {{display: flex; flex-direction: column; font-weight: 600; gap: 0.3rem;}}
     #create-task-form input,
     #create-task-form textarea,
     #create-task-form select {{font-family: inherit; font-size: 1rem; padding: 0.45rem 0.55rem; border: 1px solid #c0c0c0; border-radius: 4px; background: #fff;}}
     #create-task-form textarea {{resize: vertical; min-height: 60px;}}
-    #create-task-form button {{align-self: flex-start; padding: 0.55rem 1.1rem; border: none; border-radius: 4px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; transition: background 0.2s ease;}}
+    #create-task-form button {{align-self: flex-start; padding: 0.55rem 1.1rem; border: none; border-radius: 4px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; font-size: 1rem; transition: background 0.2s ease;}}
     #create-task-form button:hover {{background: #1d4ed8;}}
     #research-edit-form textarea {{font-family: inherit; font-size: 0.95rem; padding: 0.45rem 0.55rem; border: 1px solid #c0c0c0; border-radius: 4px; background: #fff; width: 100%; box-sizing: border-box; resize: vertical; min-height: 120px;}}
     #research-edit-form button {{margin-top: 0.5rem; padding: 0.45rem 1rem; border: none; border-radius: 4px; background: #0b6; color: #fff; font-weight: 600; cursor: pointer; transition: background 0.2s ease;}}
@@ -554,9 +693,10 @@ def mission_board():
   </style>
 </head>
 <body>
-  <h1>Mission Board</h1>
-  <section style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:0.75rem 1rem 1rem;margin-bottom:1.5rem;max-width:900px;">
-    <h2 style="margin-top:0;">Research Topics</h2>
+<div class="container">
+  <h1>🗂 Mission Board</h1>
+  <section class="info-card">
+    <h2>Research Topics</h2>
     {research_html}
     <details style="margin-top:0.75rem;">
       <summary style="cursor:pointer;font-weight:600;color:#2563eb;">Edit research topic</summary>
@@ -570,26 +710,16 @@ def mission_board():
       <div id="research-message" aria-live="polite"></div>
     </details>
   </section>
-  <section style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:0.75rem 1rem 1rem;margin-bottom:1.5rem;max-width:900px;">
-    <h2 style="margin-top:0;">Latest Agent Log</h2>
+  <section class="info-card">
+    <h2>Latest Agent Log</h2>
     {latest_log_html}
   </section>
-  <p>Total tasks tracked: <strong>{total_tasks}</strong></p>
-  <h2>Counts by bucket</h2>
-  <ul>
-    {"".join(count_items)}
-  </ul>
+  <p style="color:#6b7280;font-size:0.9rem;">Total tasks tracked: <strong style="color:#111;">{total_tasks}</strong></p>
   <div id="delete-message" aria-live="polite"></div>
-  <table>
-    <thead>
-      <tr><th>State</th><th>Status</th><th>Priority</th><th>Title</th><th>Last Updated (UTC)</th><th>File</th><th>Goal</th><th>Actions</th></tr>
-    </thead>
-    <tbody>
-      {"".join(table_rows)}
-    </tbody>
-  </table>
+  {"".join(state_sections_html)}
+  <hr class="divider">
   <section class="form-card">
-    <h2>Create a task</h2>
+    <h2>➕ Create a task</h2>
     <p>Edit the markdown template below and submit to save a new task into the <strong>backlog</strong>. Move it to inbox when it is ready for execution.</p>
     <form id="create-task-form">
       <label style="font-weight:600;">
@@ -722,6 +852,7 @@ def mission_board():
       }});
     }});
   </script>
+</div>
 </body>
 </html>
 """
